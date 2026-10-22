@@ -1,19 +1,37 @@
-import { useId } from 'react'
+import { PencilIcon, Trash2Icon } from 'lucide-react'
+import { useId, useState } from 'react'
 
 import { errorMessage, isApiError } from '@/api/errors'
-import type { TimelineItem } from '@/api/generated/types.gen'
-import { useProject } from '@/api/projects'
+import type { ProjectRead, TimelineItem } from '@/api/generated/types.gen'
+import { useDeleteProject, useProject } from '@/api/projects'
+import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { ErrorBanner } from '@/components/ErrorBanner'
 import { Badge } from '@/components/ui/badge'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from '@/components/ui/card'
 import { Separator } from '@/components/ui/separator'
 import { Spinner } from '@/components/ui/spinner'
 
 import { formatBudgetRange, formatDate, formatDueDate } from './format'
 import { ReviewPanel } from './ReviewPanel'
 
-export function ProjectDetail({ projectId }: { projectId: number }) {
+interface ProjectDetailProps {
+  projectId: number
+  onEdit: (project: ProjectRead) => void
+  onDeleted: () => void
+}
+
+export function ProjectDetail({ projectId, onEdit, onDeleted }: ProjectDetailProps) {
   const { data: project, error, isPending, isError, isFetching, refetch } = useProject(projectId)
+  const deleteProject = useDeleteProject()
+  const [confirmDelete, setConfirmDelete] = useState(false)
   const headingId = useId()
 
   if (isPending) {
@@ -51,6 +69,34 @@ export function ProjectDetail({ projectId }: { projectId: number }) {
             <Badge variant="outline">{project.industry}</Badge>
             <span>Created {formatDate(project.created_at)}</span>
           </CardDescription>
+          <CardAction className="flex gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              // Edits start a new review, so they wait for the running one to finish.
+              disabled={project.review_status === 'pending'}
+              title={
+                project.review_status === 'pending'
+                  ? 'Available once the review finishes'
+                  : undefined
+              }
+              onClick={() => onEdit(project)}
+            >
+              <PencilIcon data-icon="inline-start" />
+              Edit
+            </Button>
+            <Button
+              size="sm"
+              variant="destructive"
+              onClick={() => {
+                deleteProject.reset()
+                setConfirmDelete(true)
+              }}
+            >
+              <Trash2Icon data-icon="inline-start" />
+              Delete
+            </Button>
+          </CardAction>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
           <dl className="grid gap-1">
@@ -63,6 +109,33 @@ export function ProjectDetail({ projectId }: { projectId: number }) {
         </CardContent>
       </Card>
       <ReviewPanel project={project} />
+
+      <ConfirmDialog
+        open={confirmDelete}
+        onOpenChange={setConfirmDelete}
+        title={`Delete “${project.title}”?`}
+        description={
+          deleteProject.isError ? (
+            <span role="alert" className="text-destructive">
+              Couldn't delete the project: {errorMessage(deleteProject.error)}
+            </span>
+          ) : (
+            'This permanently removes the project and its AI review. It cannot be undone.'
+          )
+        }
+        cancelLabel="Keep project"
+        confirmLabel={deleteProject.isError ? 'Try again' : 'Delete project'}
+        destructive
+        pending={deleteProject.isPending}
+        onConfirm={() =>
+          deleteProject.mutate(project.id, {
+            onSuccess: () => {
+              setConfirmDelete(false)
+              onDeleted()
+            },
+          })
+        }
+      />
     </article>
   )
 }

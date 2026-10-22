@@ -10,6 +10,15 @@ import { server } from '@/test/server'
 
 import { ProjectDetail } from './ProjectDetail'
 
+function renderDetail(projectId: number) {
+  const onEdit = vi.fn<(project: ProjectRead) => void>()
+  const onDeleted = vi.fn<() => void>()
+  const result = renderWithQueryClient(
+    <ProjectDetail projectId={projectId} onEdit={onEdit} onDeleted={onDeleted} />,
+  )
+  return { ...result, onEdit, onDeleted }
+}
+
 function serveProject(...responses: ProjectRead[]) {
   const [first] = responses
   let calls = 0
@@ -38,7 +47,7 @@ describe('ProjectDetail', () => {
     })
     serveProject(project)
 
-    renderWithQueryClient(<ProjectDetail projectId={project.id} />)
+    renderDetail(project.id)
 
     expect(await screen.findByRole('heading', { name: 'Clinic booking' })).toBeInTheDocument()
     expect(screen.getByText('$10,000 – $25,000')).toBeInTheDocument()
@@ -56,7 +65,7 @@ describe('ProjectDetail', () => {
     const project = makeProject({ timeline: [] })
     serveProject(project)
 
-    renderWithQueryClient(<ProjectDetail projectId={project.id} />)
+    renderDetail(project.id)
 
     expect(await screen.findByText('No timeline entries')).toBeInTheDocument()
   })
@@ -67,11 +76,75 @@ describe('ProjectDetail', () => {
     const review = makeReview({ summary: 'Finished summary.' })
     serveProject(pending, { ...pending, review_status: 'complete', review })
 
-    renderWithQueryClient(<ProjectDetail projectId={pending.id} />)
+    renderDetail(pending.id)
 
     expect(await screen.findByText('Analyzing project…')).toBeInTheDocument()
     await vi.advanceTimersByTimeAsync(REVIEW_POLL_INTERVAL_MS)
     expect(await screen.findByText('Finished summary.')).toBeInTheDocument()
+  })
+
+  it('opens the editor with the current project', async () => {
+    const project = makeProject({ title: 'Clinic booking' })
+    serveProject(project)
+    const { user, onEdit } = renderDetail(project.id)
+
+    await user.click(await screen.findByRole('button', { name: 'Edit' }))
+
+    expect(onEdit).toHaveBeenCalledWith(project)
+  })
+
+  it('disables editing while a review is running', async () => {
+    const project = makeProject({ review_status: 'pending', review: null })
+    serveProject(project)
+
+    renderDetail(project.id)
+
+    expect(await screen.findByRole('button', { name: 'Edit' })).toBeDisabled()
+  })
+
+  it('deletes the project after confirmation', async () => {
+    const project = makeProject({ title: 'Clinic booking' })
+    serveProject(project)
+    let deleted = false
+    server.use(
+      http.delete(`*/api/projects/${project.id}`, () => {
+        deleted = true
+        return new HttpResponse(null, { status: 204 })
+      }),
+    )
+    const { user, onDeleted } = renderDetail(project.id)
+
+    await user.click(await screen.findByRole('button', { name: 'Delete' }))
+    const prompt = await screen.findByRole('alertdialog', { name: 'Delete “Clinic booking”?' })
+
+    // Backing out leaves the project alone.
+    await user.click(within(prompt).getByRole('button', { name: 'Keep project' }))
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+    expect(deleted).toBe(false)
+
+    await user.click(screen.getByRole('button', { name: 'Delete' }))
+    await user.click(await screen.findByRole('button', { name: 'Delete project' }))
+
+    await vi.waitFor(() => expect(onDeleted).toHaveBeenCalledOnce())
+    expect(deleted).toBe(true)
+  })
+
+  it('keeps the prompt open with the reason when deleting fails', async () => {
+    const project = makeProject()
+    serveProject(project)
+    server.use(
+      http.delete(`*/api/projects/${project.id}`, () =>
+        HttpResponse.json({ detail: 'Database is locked' }, { status: 500 }),
+      ),
+    )
+    const { user, onDeleted } = renderDetail(project.id)
+
+    await user.click(await screen.findByRole('button', { name: 'Delete' }))
+    await user.click(await screen.findByRole('button', { name: 'Delete project' }))
+
+    expect(await screen.findByText(/Couldn't delete the project: Database is locked/)).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeEnabled()
+    expect(onDeleted).not.toHaveBeenCalled()
   })
 
   it('reports a missing project', async () => {
@@ -81,7 +154,7 @@ describe('ProjectDetail', () => {
       ),
     )
 
-    renderWithQueryClient(<ProjectDetail projectId={999} />)
+    renderDetail(999)
 
     expect(await screen.findByText('Project not found')).toBeInTheDocument()
     expect(screen.getByText('Project 999 not found')).toBeInTheDocument()

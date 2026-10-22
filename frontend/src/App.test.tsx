@@ -61,6 +61,41 @@ describe('App', () => {
     expect(within(dialog).getByLabelText('Title')).toBeInstanceOf(HTMLInputElement)
   })
 
+  it('edits the selected project and returns to the empty state after deleting it', async () => {
+    let project = makeProject({ title: 'Clinic booking' })
+    let deleted = false
+    server.use(
+      http.get('*/api/projects', () => HttpResponse.json(deleted ? [] : [project])),
+      http.get(`*/api/projects/${project.id}`, () => HttpResponse.json(project)),
+      http.put(`*/api/projects/${project.id}`, async ({ request }) => {
+        const body = (await request.json()) as ProjectCreate
+        project = { ...project, ...body, review_status: 'complete' }
+        return HttpResponse.json(project)
+      }),
+      http.delete(`*/api/projects/${project.id}`, () => {
+        deleted = true
+        return new HttpResponse(null, { status: 204 })
+      }),
+    )
+    const { user } = renderWithQueryClient(<App />)
+    await user.click(await screen.findByRole('button', { name: /Clinic booking/ }))
+
+    await user.click(await screen.findByRole('button', { name: 'Edit' }))
+    const dialog = screen.getByRole('dialog', { name: 'Edit project' })
+    await user.type(within(dialog).getByLabelText('Title'), ' v2')
+    await user.click(within(dialog).getByRole('button', { name: 'Save changes' }))
+    await user.click(await screen.findByRole('button', { name: 'Save anyway' }))
+
+    expect(await screen.findByRole('heading', { name: 'Clinic booking v2' })).toBeInTheDocument()
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Delete' }))
+    await user.click(await screen.findByRole('button', { name: 'Delete project' }))
+
+    expect(await screen.findByText('Select a project')).toBeInTheDocument()
+    expect(await screen.findByText('No projects yet')).toBeInTheDocument()
+  })
+
   it('creates a first project from the empty state and selects it', async () => {
     const projects: ProjectRead[] = []
     server.use(
