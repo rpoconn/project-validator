@@ -1,9 +1,12 @@
 from typing import Any
 
+import pytest
+from fastapi import HTTPException
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.features.projects import service
+from src.features.projects.router import _http_errors
 from src.features.projects.schemas import ProjectReview
 from tests.conftest import FakeReviewRunner
 from tests.features.projects.factories import project_payload
@@ -243,3 +246,39 @@ async def test_openapi_exposes_project_schemas_and_operation_ids(client: AsyncCl
     assert rerun["operationId"] == "rerun_review"
     assert {"202", "404", "409"} <= set(rerun["responses"])
     assert schemas["ReviewStatus"]["enum"] == ["unreviewed", "pending", "complete", "error"]
+
+
+# --- error translation --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("error", "status_code", "detail"),
+    [
+        (service.ProjectNotFoundError(42), 404, "Project 42 not found"),
+        (service.ReviewAlreadyPendingError(42), 409, "Project 42 already has a review in progress"),
+    ],
+)
+def test_http_errors_translates_service_errors(
+    error: Exception, status_code: int, detail: str
+) -> None:
+    with pytest.raises(HTTPException) as info, _http_errors():
+        raise error
+
+    assert info.value.status_code == status_code
+    assert info.value.detail == detail
+    assert info.value.__cause__ is error
+
+
+def test_http_errors_lets_other_errors_through() -> None:
+    with pytest.raises(ValueError, match="unrelated"), _http_errors():
+        raise ValueError("unrelated")
+
+
+@pytest.mark.parametrize("method", ["get", "put", "delete"])
+async def test_non_integer_project_id_is_rejected(client: AsyncClient, method: str) -> None:
+    kwargs: dict[str, Any] = {"json": project_payload()} if method == "put" else {}
+
+    response = await client.request(method, "/api/projects/not-a-number", **kwargs)
+
+    assert response.status_code == 422
+    assert ["path", "project_id"] in [error["loc"] for error in response.json()["detail"]]

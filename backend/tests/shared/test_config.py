@@ -1,7 +1,7 @@
 import pytest
-from pydantic import SecretStr
+from pydantic import SecretStr, ValidationError
 
-from src.shared.config import LLMProvider, Settings
+from src.shared.config import LLMProvider, Settings, _is_set, get_settings
 
 
 def test_defaults_without_env(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -78,3 +78,43 @@ def test_reads_provider_from_environment(monkeypatch: pytest.MonkeyPatch) -> Non
     assert settings.active_llm_provider == "openai"
     assert settings.llm_configured is True
     assert settings.openai_model == "gpt-test"
+
+
+# --- validation and caching ---------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"llm_max_attempts": 0},
+        {"llm_timeout_seconds": 0},
+        {"llm_timeout_seconds": -1},
+        {"llm_provider": "gemini"},
+    ],
+)
+def test_invalid_settings_are_rejected(overrides: dict[str, object]) -> None:
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, **overrides)  # type: ignore[arg-type]
+
+
+def test_invalid_provider_from_environment_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LLM_PROVIDER", "gemini")
+
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None)
+
+
+@pytest.mark.parametrize(
+    ("key", "expected"),
+    [(None, False), (SecretStr(""), False), (SecretStr(" \t"), False), (SecretStr(" sk "), True)],
+)
+def test_is_set_ignores_blank_keys(key: SecretStr | None, expected: bool) -> None:
+    assert _is_set(key) is expected
+
+
+def test_get_settings_is_cached() -> None:
+    get_settings.cache_clear()
+    try:
+        assert get_settings() is get_settings()
+    finally:
+        get_settings.cache_clear()

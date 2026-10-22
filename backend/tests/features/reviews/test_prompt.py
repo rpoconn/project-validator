@@ -1,11 +1,16 @@
-from datetime import date
+from datetime import UTC, date, datetime, timedelta, timezone
 from typing import Any
+
+import pytest
 
 from src.features.projects.schemas import ProjectRead
 from src.features.reviews.prompt import (
     EXISTING_DESCRIPTION_CHARS,
     SYSTEM_PROMPT,
+    _iso,
+    _truncate,
     build_prompt,
+    render_existing_projects,
 )
 from tests.features.projects.factories import project_payload
 
@@ -122,3 +127,44 @@ def test_empty_portfolio_and_truncation_notes() -> None:
 
     truncated = build_prompt(_project(), [_project(2)], today=TODAY, truncated=True).user_message
     assert "Only the 1 most recently created projects are shown" in truncated
+
+
+# --- helpers ------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("value", "limit", "expected"),
+    [
+        ("abc", 3, "abc"),
+        ("abc", 4, "abc"),
+        ("abcd", 3, "abc…"),
+        ("ab  cd", 4, "ab…"),
+        ("", 0, ""),
+    ],
+)
+def test_truncate(value: str, limit: int, expected: str) -> None:
+    assert _truncate(value, limit) == expected
+
+
+def test_existing_descriptions_are_truncated_before_escaping() -> None:
+    # Escaping first would cut an entity in half; escaping after keeps every "&" whole.
+    description = "&" * EXISTING_DESCRIPTION_CHARS + "tail"
+
+    message = build_prompt(_project(), [_project(2, description=description)], today=TODAY)
+
+    expected = f"<description>{'&amp;' * EXISTING_DESCRIPTION_CHARS}…</description>"
+    assert expected in message.user_message
+
+
+def test_iso_uses_z_for_utc_and_keeps_other_offsets() -> None:
+    assert _iso(datetime(2026, 1, 2, 3, 4, 5, tzinfo=UTC)) == "2026-01-02T03:04:05Z"
+    assert _iso(datetime(2026, 1, 2, tzinfo=timezone(timedelta(hours=2)))) == (
+        "2026-01-02T00:00:00+02:00"
+    )
+
+
+def test_truncation_note_is_dropped_for_an_empty_portfolio() -> None:
+    rendered = render_existing_projects([], truncated=True)
+
+    assert rendered.startswith('<existing_projects count="0" />')
+    assert "omitted" not in rendered

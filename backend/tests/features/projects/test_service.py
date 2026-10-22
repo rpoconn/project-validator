@@ -202,3 +202,35 @@ async def test_updates_on_missing_project_raise(
 ) -> None:
     with pytest.raises(service.ProjectNotFoundError):
         await operation(session)
+
+
+# --- helpers and timestamps ---------------------------------------------------------------------
+
+
+def test_column_values_serialises_timeline_for_json_storage() -> None:
+    data = ProjectCreate.model_validate(
+        project_payload(timeline=[{"goal": " Launch ", "due_at": "2027-01-01T09:00:00+02:00"}])
+    )
+
+    values = service._column_values(data)
+
+    assert set(values) == {
+        "title",
+        "description",
+        "budget_min",
+        "budget_max",
+        "industry",
+        "timeline",
+    }
+    assert values["timeline"] == [{"goal": "Launch", "due_at": "2027-01-01T07:00:00Z"}]
+
+
+async def test_reset_interrupted_reviews_stamps_review_updated_at(session: AsyncSession) -> None:
+    project = await _create(session)
+    assert project.review_updated_at is None
+
+    await service.reset_interrupted_reviews(session)
+
+    await session.refresh(project)
+    assert project.review_updated_at is not None
+    assert project.review_updated_at.tzinfo == UTC

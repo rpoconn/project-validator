@@ -3,12 +3,15 @@ from pathlib import Path
 
 import pytest
 from sqlalchemy import Integer, inspect
+from sqlalchemy.dialects import sqlite
 from sqlalchemy.exc import StatementError
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.shared.database import (
     Base,
     UTCDateTime,
+    _ensure_sqlite_dir,
+    _is_sqlite_memory,
     create_engine,
     create_session_factory,
     init_db,
@@ -72,3 +75,60 @@ async def test_utc_datetime_rejects_naive_values() -> None:
                 await session.commit()
     finally:
         await engine.dispose()
+
+
+# --- helpers, called directly -------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        ("sqlite+aiosqlite://", True),
+        ("sqlite:///:memory:", True),
+        ("sqlite+aiosqlite:///:memory:", True),
+        ("sqlite+aiosqlite:///./data/app.db", False),
+        ("postgresql+asyncpg://user@host/db", False),
+    ],
+)
+def test_is_sqlite_memory(url: str, expected: bool) -> None:
+    assert _is_sqlite_memory(url) is expected
+
+
+def test_ensure_sqlite_dir_only_creates_folders_for_sqlite_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    _ensure_sqlite_dir("sqlite+aiosqlite://")
+    _ensure_sqlite_dir("postgresql+asyncpg://user@host/nested/db")
+    assert list(tmp_path.iterdir()) == []
+
+    _ensure_sqlite_dir(f"sqlite+aiosqlite:///{(tmp_path / 'data' / 'app.db').as_posix()}")
+    assert (tmp_path / "data").is_dir()
+
+
+_DIALECT = sqlite.dialect()
+_EASTERN = timezone(timedelta(hours=-5))
+
+
+def test_utc_datetime_bind_param_normalises_to_utc() -> None:
+    column = UTCDateTime()
+
+    assert column.process_bind_param(None, _DIALECT) is None
+    bound = column.process_bind_param(datetime(2027, 1, 1, 12, tzinfo=_EASTERN), _DIALECT)
+    assert bound == datetime(2027, 1, 1, 17, tzinfo=UTC)
+    assert bound is not None and bound.tzinfo == UTC
+    with pytest.raises(ValueError, match="timezone-aware"):
+        column.process_bind_param(datetime(2027, 1, 1), _DIALECT)
+
+
+def test_utc_datetime_result_value_retags_naive_values_as_utc() -> None:
+    column = UTCDateTime()
+
+    assert column.process_result_value(None, _DIALECT) is None
+    assert column.process_result_value(datetime(2027, 1, 1, 17), _DIALECT) == datetime(
+        2027, 1, 1, 17, tzinfo=UTC
+    )
+    aware = column.process_result_value(datetime(2027, 1, 1, 12, tzinfo=_EASTERN), _DIALECT)
+    assert aware == datetime(2027, 1, 1, 17, tzinfo=UTC)
+    assert aware is not None and aware.tzinfo == UTC

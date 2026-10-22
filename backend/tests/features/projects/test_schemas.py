@@ -4,7 +4,13 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from src.features.projects.schemas import MAX_TIMELINE_ITEMS, ProjectCreate, ProjectReview
+from src.features.projects.models import Project, ReviewStatus
+from src.features.projects.schemas import (
+    MAX_TIMELINE_ITEMS,
+    ProjectCreate,
+    ProjectRead,
+    ProjectReview,
+)
 from tests.features.projects.factories import project_payload
 
 
@@ -132,3 +138,73 @@ def test_review_rejects_duplicate_or_blank_tags(tags: list[str]) -> None:
 def test_review_rejects_blank_summary() -> None:
     with pytest.raises(ValidationError, match="summary must not be blank"):
         ProjectReview(summary="   ", tags=["a", "b", "c"], risks=[])
+
+
+# --- boundaries ---------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("field", "max_length"), [("title", 200), ("description", 5000), ("industry", 100)]
+)
+def test_text_fields_accept_the_limit_and_reject_one_more(field: str, max_length: int) -> None:
+    at_limit = ProjectCreate.model_validate(project_payload(**{field: "x" * max_length}))
+    assert getattr(at_limit, field) == "x" * max_length
+
+    with pytest.raises(ValidationError) as exc_info:
+        ProjectCreate.model_validate(project_payload(**{field: "x" * (max_length + 1)}))
+    assert (field,) in _error_locations(exc_info.value)
+
+
+def test_timeline_goal_length_limit() -> None:
+    def timeline(length: int) -> list[dict[str, Any]]:
+        return [{"goal": "g" * length, "due_at": "2027-01-01T00:00:00Z"}]
+
+    assert ProjectCreate.model_validate(project_payload(timeline=timeline(500))).timeline
+
+    with pytest.raises(ValidationError) as exc_info:
+        ProjectCreate.model_validate(project_payload(timeline=timeline(501)))
+    assert ("timeline", 0, "goal") in _error_locations(exc_info.value)
+
+
+def test_timeline_at_the_cap_is_allowed() -> None:
+    item = {"goal": "Goal", "due_at": "2027-01-01T00:00:00Z"}
+
+    project = ProjectCreate.model_validate(project_payload(timeline=[item] * MAX_TIMELINE_ITEMS))
+
+    assert len(project.timeline) == MAX_TIMELINE_ITEMS
+
+
+def test_zero_budget_is_allowed() -> None:
+    project = ProjectCreate.model_validate(project_payload(budget_min=0, budget_max=0))
+
+    assert project.budget_min == project.budget_max == 0
+
+
+def test_review_may_have_no_risks() -> None:
+    assert ProjectReview(summary="Fine.", tags=["a", "b", "c"], risks=[]).risks == []
+
+
+def test_project_read_from_orm_object() -> None:
+    created_at = datetime(2026, 10, 1, 9, 30, tzinfo=UTC)
+    project = Project(
+        id=5,
+        title="Stored",
+        description="d",
+        budget_min=1,
+        budget_max=2,
+        industry="i",
+        timeline=[{"goal": "Launch", "due_at": "2027-01-01T00:00:00Z"}],
+        created_at=created_at,
+        review_status=ReviewStatus.COMPLETE,
+        review={"summary": "ok", "tags": ["a", "b", "c"], "risks": []},
+        review_error=None,
+        review_updated_at=None,
+    )
+
+    read = ProjectRead.model_validate(project)
+
+    assert read.id == 5
+    assert read.timeline[0].due_at == datetime(2027, 1, 1, tzinfo=UTC)
+    assert read.created_at == created_at
+    assert read.review_status is ReviewStatus.COMPLETE
+    assert read.review == ProjectReview(summary="ok", tags=["a", "b", "c"], risks=[])

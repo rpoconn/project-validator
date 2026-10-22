@@ -1,12 +1,12 @@
 from collections.abc import Callable
-from typing import Any
+from typing import Any, cast
 
 import anthropic
 import httpx2
 import openai
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-from tenacity import wait_none
+from tenacity import AsyncRetrying, RetryCallState, wait_none
 
 from src.features.projects import service as projects_service
 from src.features.projects.models import Project, ReviewStatus
@@ -14,12 +14,18 @@ from src.features.projects.schemas import ProjectCreate, ProjectReview
 from src.features.reviews import service as reviews_service
 from src.features.reviews.anthropic_provider import AnthropicReviewProvider
 from src.features.reviews.openai_provider import OpenAIReviewProvider
-from src.features.reviews.provider import ReviewProvider, ReviewRefusedError
+from src.features.reviews.provider import (
+    MalformedReviewError,
+    ReviewError,
+    ReviewProvider,
+    ReviewRefusedError,
+)
 from src.features.reviews.schemas import ReviewPrompt
 from src.features.reviews.service import (
     MAX_EXISTING_PROJECTS,
     describe_error,
     get_review_provider,
+    get_review_runner,
     is_retryable,
     request_review,
     run_review,
@@ -398,3 +404,99 @@ async def test_run_review_never_raises_for_missing_project(
     await _run(12345, session_factory, provider)
 
     assert script.calls == []
+
+
+# --- edge cases ---------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("error", "retryable"),
+    [
+        (api_error(anthropic.APIStatusError, 408), True),
+        (api_error(openai.APIStatusError, 502), True),
+        (api_error(anthropic.APIStatusError, 503), True),
+        (api_error(anthropic.NotFoundError, 404), False),
+        (api_error(openai.UnprocessableEntityError, 422), False),
+        (ReviewError("plain"), False),
+        (ReviewRefusedError("declined"), False),
+        (MalformedReviewError("bad json"), True),
+    ],
+)
+def test_is_retryable_edge_cases(error: Exception, retryable: bool) -> None:
+    assert is_retryable(error) is retryable
+
+
+def test_describe_error_for_connection_and_review_errors() -> None:
+    connection = describe_error(anthropic.APIConnectionError(request=_REQUEST))
+    assert connection.startswith("APIConnectionError: Connection error")
+    assert "request_id" not in connection
+
+    assert describe_error(ReviewError("bad", request_id="req_r")) == (
+        "ReviewError: bad (request_id=req_r)"
+    )
+    assert describe_error(MalformedReviewError("")) == "MalformedReviewError: no details"
+
+
+def test_log_retry_describes_the_failed_attempt(caplog: pytest.LogCaptureFixture) -> None:
+    state = RetryCallState(retry_object=AsyncRetrying(), fn=None, args=(), kwargs={})
+    state.attempt_number = 2
+
+    with caplog.at_level("WARNING", logger="src.features.reviews.service"):
+        reviews_service._log_retry(state)
+        state.set_exception((ValueError, ValueError("boom"), None))
+        reviews_service._log_retry(state)
+
+    first, second = (record.getMessage() for record in caplog.records)
+    assert first == "Review attempt 2 failed, retrying: unknown error"
+    assert second == "Review attempt 2 failed, retrying: ValueError: boom"
+
+
+async def test_request_review_with_a_single_attempt_never_retries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider, script = scripted_anthropic(
+        monkeypatch, api_error(anthropic.RateLimitError, 429), make_message()
+    )
+
+    with pytest.raises(anthropic.RateLimitError):
+        await _request(provider, max_attempts=1)
+
+    assert len(script.calls) == 1
+
+
+async def test_record_outcome_logs_when_the_database_is_unavailable(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    def broken_factory() -> AsyncSession:
+        raise RuntimeError("database is down")
+
+    with caplog.at_level("ERROR", logger="src.features.reviews.service"):
+        await reviews_service._record_outcome(
+            cast(async_sessionmaker[AsyncSession], broken_factory), 7, "boom"
+        )
+
+    [record] = caplog.records
+    assert record.getMessage() == "Could not record review outcome for project 7"
+    assert record.exc_info is not None
+
+
+def test_review_runner_dependency_returns_run_review() -> None:
+    assert get_review_runner() is run_review
+
+
+async def test_run_review_at_the_cap_does_not_claim_projects_were_omitted(
+    monkeypatch: pytest.MonkeyPatch,
+    session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    for index in range(MAX_EXISTING_PROJECTS):
+        await _create(session, title=f"Other {index}")
+    project = await _create(session)
+    provider, script = scripted_anthropic(monkeypatch, make_message())
+
+    await _run(project.id, session_factory, provider)
+
+    user_message = script.calls[0]["messages"][0]["content"]
+    assert user_message.count("<existing_project id=") == MAX_EXISTING_PROJECTS
+    assert "<title>Other 0</title>" in user_message
+    assert "omitted" not in user_message

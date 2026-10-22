@@ -6,7 +6,12 @@ from pydantic import SecretStr
 
 from src.shared import llm_clients
 from src.shared.config import Settings
-from src.shared.llm_clients import LLMNotConfiguredError, get_anthropic_client, get_openai_client
+from src.shared.llm_clients import (
+    LLMNotConfiguredError,
+    _require_key,
+    get_anthropic_client,
+    get_openai_client,
+)
 
 CLIENTS = [
     pytest.param(get_anthropic_client, "anthropic_api_key", "ANTHROPIC_API_KEY", id="anthropic"),
@@ -56,3 +61,10 @@ def test_missing_key_raises(
 
     with pytest.raises(LLMNotConfiguredError, match=f"{env_var} not configured"):
         get_client()
+
+
+def test_require_key_strips_surrounding_whitespace() -> None:
+    assert _require_key(SecretStr("  sk-test \n"), "ANY_KEY") == "sk-test"
+
+    with pytest.raises(LLMNotConfiguredError, match="ANY_KEY not configured"):
+        _require_key(SecretStr("   "), "ANY_KEY")
