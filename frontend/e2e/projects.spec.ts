@@ -39,8 +39,8 @@ const flaky: NewProject = {
   budgetMax: '30000',
 }
 
-async function fillProject(page: Page, project: NewProject) {
-  const dialog = page.getByRole('dialog', { name: 'New project' })
+async function fillProject(page: Page, project: NewProject, dialogName = 'New project') {
+  const dialog = page.getByRole('dialog', { name: dialogName })
   await dialog.getByLabel('Title').fill(project.title)
   await dialog.getByLabel('Description').fill(project.description)
   await dialog.getByLabel('Industry').fill(project.industry)
@@ -52,6 +52,13 @@ async function createProject(page: Page, project: NewProject) {
   await page.getByRole('button', { name: 'New project' }).click()
   await fillProject(page, project)
   await page.getByRole('button', { name: 'Create project' }).click()
+  // These projects have no milestones, so the form checks first.
+  await page
+    .getByRole('alertdialog', { name: 'No milestones yet' })
+    .getByRole('button', {
+      name: 'Create anyway',
+    })
+    .click()
   await expect(page.getByRole('dialog')).toBeHidden()
 }
 
@@ -71,10 +78,13 @@ test('creates the first project from the empty state and shows its review', asyn
 
   await page.getByRole('button', { name: 'Create your first project' }).click()
   const dialog = page.getByRole('dialog', { name: 'New project' })
+  await expect(dialog.getByText('Required field')).toBeVisible()
 
   // An empty submit is caught client-side.
   await dialog.getByRole('button', { name: 'Create project' }).click()
-  await expect(dialog.getByText('Required')).toHaveCount(5)
+  await expect(dialog.getByText('Required', { exact: true })).toHaveCount(5)
+  await expect(dialog.getByLabel('Title')).toHaveAttribute('aria-invalid', 'true')
+  await expect(dialog.getByLabel('Title')).toBeFocused()
 
   // A reversed budget range is caught, then fixed.
   await fillProject(page, { ...robotics, budgetMax: '1000' })
@@ -138,4 +148,67 @@ test('shows a failed review and recovers with Retry review', async ({ page }) =>
   await expect(mockSummary(page, flaky.title)).toBeVisible({ timeout: REVIEW_TIMEOUT_MS })
   await expect(page.getByText('compared against 2 existing projects')).toBeVisible()
   await expect(page.getByRole('button', { name: 'Re-run review' })).toBeVisible()
+})
+
+test('asks before discarding a half-filled project', async ({ page }) => {
+  await page.goto('/')
+  const newProject = page.getByRole('button', { name: 'New project' })
+  const dialog = page.getByRole('dialog', { name: 'New project' })
+  const discardPrompt = page.getByRole('alertdialog', { name: 'Discard this project?' })
+
+  // An untouched form closes straight away.
+  await newProject.click()
+  await page.keyboard.press('Escape')
+  await expect(dialog).toBeHidden()
+  await expect(discardPrompt).toBeHidden()
+
+  // Clicking the background after typing asks first, and keeping the form loses nothing.
+  await newProject.click()
+  await dialog.getByLabel('Title').fill('Half-written idea')
+  await page.mouse.click(5, 5)
+  await expect(discardPrompt).toBeVisible()
+  await discardPrompt.getByRole('button', { name: 'Keep editing' }).click()
+  await expect(discardPrompt).toBeHidden()
+  await expect(dialog.getByLabel('Title')).toHaveValue('Half-written idea')
+
+  await page.keyboard.press('Escape')
+  await discardPrompt.getByRole('button', { name: 'Discard' }).click()
+  await expect(dialog).toBeHidden()
+  await expect(projectItems(page)).toHaveCount(3)
+})
+
+test('edits a project and reviews the new details', async ({ page }) => {
+  await page.goto('/')
+  await projectItems(page).filter({ hasText: flaky.title }).click()
+  await expect(projectHeading(page, flaky.title)).toBeVisible()
+
+  await page.getByRole('button', { name: 'Edit' }).click()
+  const dialog = page.getByRole('dialog', { name: 'Edit project' })
+  await expect(dialog.getByLabel('Title')).toHaveValue(flaky.title)
+  const renamed = 'Vendor migration, phase 2'
+  await dialog.getByLabel('Title').fill(renamed)
+  await dialog.getByRole('button', { name: 'Save changes' }).click()
+  await page.getByRole('button', { name: 'Save anyway' }).click()
+  await expect(dialog).toBeHidden()
+
+  await expect(projectHeading(page, renamed)).toBeVisible()
+  await expect(page.getByText('Analyzing project…')).toBeVisible()
+  await expect(mockSummary(page, renamed)).toBeVisible({ timeout: REVIEW_TIMEOUT_MS })
+  await expect(projectItems(page).filter({ hasText: renamed })).toHaveCount(1)
+  await expect(projectItems(page).filter({ hasText: flaky.title })).toHaveCount(0)
+})
+
+test('deletes a project after confirmation', async ({ page }) => {
+  await page.goto('/')
+  const title = 'Vendor migration, phase 2'
+  await projectItems(page).filter({ hasText: title }).click()
+
+  await page.getByRole('button', { name: 'Delete' }).click()
+  const prompt = page.getByRole('alertdialog', { name: `Delete “${title}”?` })
+  await prompt.getByRole('button', { name: 'Delete project' }).click()
+
+  await expect(prompt).toBeHidden()
+  await expect(page.getByText('Select a project')).toBeVisible()
+  await expect(projectItems(page)).toHaveCount(2)
+  await expect(projectItems(page).filter({ hasText: title })).toHaveCount(0)
 })
