@@ -33,3 +33,6 @@
    - All code should have unit testing.
    - the project should have some end to end testing covering key workflows.
    - Follow testing pyramid guidelines.  
+7. **Frequent Checkins**
+   - when executing a multiple phase plan, make sure to checkin after every phase to show progress.
+   

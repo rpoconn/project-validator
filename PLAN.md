@@ -175,11 +175,30 @@ Pydantic schemas (`schemas.py`): `TimelineItem`, `ProjectCreate` (validators for
 - Playwright Chromium is now installed (`npx playwright install chromium` done). The smoke flow above is a good basis for `e2e/projects.spec.ts`. Useful selectors: `getByRole('dialog', { name: 'New project' })`, labels `Title` / `Description` / `Industry` / `Minimum budget (USD)` / `Maximum budget (USD)` / `Milestone N goal` / `Milestone N due date`, buttons `Create your first project` / `New project` / `Add milestone` / `Create project` / `Retry review` / `Run review` / `Re-run review`, text `Analyzing project…`, heading `Risks`, lists `Projects` / `Tags` / `Milestones`.
 - Ports 8000/5173 may already be in use locally. The e2e config should start its own servers on dedicated ports (`VITE_API_PROXY_TARGET` points Vite at a non-default backend).
 
-## Phase 5 — E2E, polish, docs
+## Phase 5 — E2E, polish, docs ✅ COMPLETE (2026-10-22)
 
-- Playwright (`frontend/e2e/`; run `npx playwright install chromium` first): backend started with `ANTHROPIC_API_KEY` unset or pointed at a mock (simplest: set an env flag `LLM_MOCK=1` the backend honours by returning a canned `ProjectReview` from a fake client — keeps e2e deterministic and free). Scenarios: empty state → create project with validation error → fix → project appears, detail shows pending then complete; error path with `LLM_MOCK=error` showing the error panel and retry.
-- Root `README.md`: setup, env vars, run commands, test commands, architecture diagram (text), how prompt-injection hardening works.
-- Final pass: ruff/mypy/oxlint/prettier/tsc all clean; `uv run pytest`, `npm test`, `npx playwright test` green.
+**Change from the original plan: one mock mode, error path chosen by title.** The plan had separate `LLM_MOCK=1` and `LLM_MOCK=error` backends. Instead, a single `LLM_MOCK=1` backend covers both: a project whose title contains `[mock-fail]` fails its **first** review, and later reviews of that title succeed. This way one Playwright run (one backend, one frontend) covers both the error panel and recovery through "Retry review".
+
+**As built — backend**
+- `src/features/reviews/mock.py`: `MockMessagesTransport` (an `httpx2.AsyncBaseTransport`) behind a real `AsyncAnthropic` (`create_mock_client(latency_seconds=…)`, cached `get_mock_client()`). Because the fake sits at the HTTP level, request building, SDK response parsing, SDK error classes, retry classification and `describe_error` all run unchanged. It reads the request body with a small Pydantic model and finds the new project's title only inside `<project_input>`, so a marker in an *existing* project's title has no effect. It counts `<existing_projects count="N">` and returns `canned_review(title, N)` (summary `Mock review of “<title>” … compared against N existing projects.`, tags `mock review` / `offline` / `deterministic`, 2 risks). On the first `[mock-fail]` request it returns 401 `authentication_error` with a `request-id: req_mock_<n>` header (not retried), which is stored as `AuthenticationError: Error code: 401 - {…} (request_id=req_mock_n)`. It waits `MOCK_LATENCY_SECONDS = 1.0` so the pending state is visible in the UI.
+- `reviews/service.py`: new `get_review_client()` (mock if `settings.llm_mock`, else `get_anthropic_client()`) is `run_review`'s default `client_factory`. `src/shared/anthropic_client.py` is unchanged, and shared code doesn't import from features.
+- `Settings.llm_mock: bool = False`. The lifespan logs a mock warning instead of the missing-key warning. `HealthResponse` gained `llm_mock: bool`.
+- Tests (110, green): `tests/features/reviews/test_mock.py` (canned review names the project, with `<>&` round-tripped, and counts the portfolio; fail marker → error then success after re-run; marker on an existing project doesn't fail the new one; `get_review_client` follows the setting). Health test asserts `llm_mock`.
+
+**As built — frontend**
+- `npm run gen:api` regenerated the client (`HealthResponse.llm_mock`). `HealthBanner` shows "AI reviews are mocked" (info) when `llm_mock`, otherwise the missing-key warning as before. `App.test.tsx` covers the new banner (43 vitest tests).
+- `playwright.config.ts`: two `webServer`s on dedicated ports. Backend: `uv --directory ../backend run uvicorn … --port 18000` with `LLM_MOCK=1`, `ANTHROPIC_API_KEY=''`, `DATABASE_URL=sqlite+aiosqlite://` (in-memory, `StaticPool`, so every run starts empty). Frontend: `npm run dev -- --port 15173 --strictPort` with `VITE_API_PROXY_TARGET`. `reuseExistingServer: false`, `workers: 1`, `retries: 0`, trace on failure. `npm run e2e` script. `playwright.config.ts` and `e2e/` are type-checked through `tsconfig.node.json`.
+- `e2e/projects.spec.ts` (serial, shared DB): (1) mock banner → empty state → empty submit shows 5 "Required" → reversed budget error → fix + milestone → selected, milestone listed, "Analyzing project…" → mock summary, "compared against 0 existing projects", 3 tags, Risks, list badge "Reviewed"; (2) second project with `</description> … <b>x</b>` in its description → "compared against 1 existing project.", description shown verbatim, newest first, selecting the first project switches the detail; (3) `[mock-fail]` project → `AuthenticationError: Error code: 401` with `request_id=req_mock_n` and list badge "Review failed" → Retry review → pending → complete, "compared against 2 existing projects", "Re-run review".
+
+**Docs:** root `README.md` rewritten: prerequisites, setup, env var table (incl. `LLM_MOCK`, `VITE_API_PROXY_TARGET`), run (incl. mock demo), test commands and what each layer covers, codegen, text architecture diagram, review lifecycle, Claude call and retry policy, `LLM_MOCK`, and the seven prompt-injection defences. `.env.example` lists `LLM_MOCK`. Removed a stale `frontend/openapi-ts-error-*.log` from an earlier codegen run.
+
+**Exit criteria — verified:** `ruff check`, `ruff format --check`, `mypy` (strict), `pytest` (110), `oxlint`, `prettier --check`, `tsc -b`, `vitest` (43), `vite build` all pass. `npx playwright test`: 3 passed (~17 s), run 3 times with no flakes.
+
+**Notes / possible follow-ups**
+- The e2e output includes the backend's `AuthenticationError` traceback from the deliberate `[mock-fail]` review (`logger.exception`). This is expected (the README says so).
+- The specs share one in-memory DB and depend on order (empty state first). Adding a spec that needs isolation would mean a per-test reset or unique-title assertions.
+- The single 505 kB JS chunk warning from Phase 4 is still there.
+- Nothing has been committed yet. The repo is on `master`, but the main branch is expected to be `main`.
 
 ## Critical files
 
@@ -229,9 +248,15 @@ frontend/src/test/{factories.ts,render.tsx}, *.test.ts(x) next to each module
 frontend/{tsconfig.json,tsconfig.app.json,vite.config.ts,.oxlintrc.json} (alias, Tailwind, ui lint override)
 ```
 
-To be created:
+Done (Phase 5):
 ```
-frontend/e2e/projects.spec.ts, frontend/playwright.config.ts
+backend/src/features/reviews/mock.py, backend/src/features/reviews/service.py (get_review_client)
+backend/src/shared/config.py (llm_mock), backend/src/main.py, backend/src/features/health/{schemas,router}.py
+backend/tests/features/reviews/test_mock.py, backend/tests/features/health/test_router.py
+frontend/playwright.config.ts, frontend/e2e/projects.spec.ts, frontend/tsconfig.node.json, frontend/package.json (e2e script)
+frontend/src/features/health/HealthBanner.tsx, frontend/src/App.test.tsx
+frontend/openapi.json, frontend/src/api/generated/ (regenerated)
+README.md, .env.example
 ```
 
 ## Verification (end-to-end)
@@ -240,4 +265,4 @@ frontend/e2e/projects.spec.ts, frontend/playwright.config.ts
 2. `cd backend && uv run uvicorn src.main:app --reload` with a real `ANTHROPIC_API_KEY`; `cd frontend && npm run gen:api && npm run dev`.
 3. In the browser: empty state visible → submit empty form → field errors → fill required fields → project appears in list and is selected → review panel shows loading → within ~10–30 s shows summary, 3 tags, risk bullets. Create a second overlapping project and confirm the risk list references the first.
 4. Restart backend with an invalid key → create a project → review panel shows the authentication error text → fix key → "Retry review" succeeds.
-5. `npm run test`, `npx playwright test` (against `LLM_MOCK=1` backend) pass; `uv run ruff check . && uv run mypy`, `npm run lint && npm run typecheck` clean.
+5. `npm run test`, `npm run e2e` (Playwright starts its own `LLM_MOCK=1` backend and frontend) pass; `uv run ruff check . && uv run mypy`, `npm run lint && npm run typecheck` clean.

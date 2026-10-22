@@ -13,6 +13,7 @@
     "format:check": "prettier --check .",
     "test": "vitest run",
     "test:watch": "vitest",
+    "e2e": "playwright test",
     "gen:spec": "uv --directory ../backend run python -m scripts.export_openapi",
     "gen:api": "npm run gen:spec && openapi-ts"
   },
