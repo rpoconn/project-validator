@@ -1,0 +1,47 @@
+# Production-style stack: http://localhost:8080 (UI) with /api proxied to the backend.
+#   docker compose up --build
+# Run the checks (lint, types, tests) for both apps inside Docker:
+#   docker compose --profile check build
+
+services:
+  backend:
+    build:
+      context: ./backend
+      target: runtime
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      # Pass-through so `LLM_MOCK=1 docker compose up` works without editing .env.
+      LLM_MOCK: ${LLM_MOCK:-false}
+    volumes:
+      - backend-data:/app/data
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      target: runtime
+    ports:
+      - "8080:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+  backend-check:
+    profiles: [check]
+    build:
+      context: ./backend
+      target: check
+
+  frontend-check:
+    profiles: [check]
+    build:
+      context: ./frontend
+      target: check
+
+volumes:
+  backend-data:

@@ -14,6 +14,8 @@ and a checklist of risks.
 - Python 3.13 and [uv](https://docs.astral.sh/uv/)
 - Node.js 22+ and npm
 - An Anthropic API key, or use `LLM_MOCK=1` to run without one (see below)
+- Or, to run everything in containers instead: [Docker](https://docs.docker.com/get-docker/) with
+  Compose v2 (see [Docker](#docker)). Python, uv and Node aren't needed on the host then.
 
 ## Setup
 
@@ -53,6 +55,75 @@ cd frontend && npm run dev                            # http://localhost:5173 (p
 
 To demo without an API key, start the backend with `LLM_MOCK=1` (PowerShell:
 `$env:LLM_MOCK='1'; uv run uvicorn src.main:app`). The UI shows an "AI reviews are mocked" banner.
+
+## Docker
+
+Run the production build of the whole stack in containers. All commands run from the repo root.
+
+### 1. Configure
+
+```sh
+cp .env.example .env          # then set ANTHROPIC_API_KEY (or LLM_MOCK=1)
+```
+
+`.env` is optional. Without it, the backend starts but reviews fail until a key is set. The file
+is read by the backend container at runtime and is never copied into an image.
+
+### 2. Build and start
+
+```sh
+docker compose up --build -d
+```
+
+| URL | What |
+|---|---|
+| http://localhost:8080 | The app (nginx serves the UI and proxies `/api` to the backend) |
+| http://localhost:8000/docs | The API's Swagger UI, directly on the backend |
+
+The frontend container waits until the backend's health check passes before it starts.
+
+To run without an API key, use mock mode. Setting `LLM_MOCK=1` in `.env` works too.
+
+```sh
+LLM_MOCK=1 docker compose up --build -d              # bash / zsh
+$env:LLM_MOCK='1'; docker compose up --build -d      # PowerShell
+```
+
+### 3. Day to day
+
+```sh
+docker compose logs -f backend      # follow the API logs
+docker compose ps                   # status and health of each container
+docker compose up --build -d        # rebuild after code changes
+docker compose down                 # stop; projects are kept
+docker compose down -v              # stop and delete the database volume
+```
+
+Projects are stored in SQLite in the `backend-data` volume, so they survive restarts and rebuilds.
+
+### 4. Run the checks in Docker
+
+```sh
+docker compose --profile check build
+```
+
+This builds the `check` target of both Dockerfiles. The backend target runs ruff (lint and format
+check), mypy and pytest. The frontend target runs oxlint, prettier, tsc and Vitest. If any check
+fails, the build fails, so this command also works as a CI step. To check one app only, add
+`backend-check` or `frontend-check` to the command. The Playwright e2e suite isn't containerized;
+run it on the host with `npm run e2e`.
+
+### How the images are built
+
+- [`backend/Dockerfile`](backend/Dockerfile) uses `python:3.13-slim`. It installs the locked
+  dependencies with `uv sync --locked --no-dev` and runs uvicorn on port 8000 as a non-root user.
+- [`frontend/Dockerfile`](frontend/Dockerfile) runs `npm ci && npm run build` on `node:24-slim`,
+  then copies `dist/` into `nginx:1.29-alpine`.
+  [`nginx.conf.template`](frontend/nginx.conf.template) sends unknown paths to `index.html`,
+  caches hashed assets, and proxies `/api` to `API_UPSTREAM` (default `http://backend:8000`). The
+  browser only talks to one origin, so `CORS_ORIGINS` doesn't apply.
+- The `.dockerignore` files keep `.env`, `node_modules`, `.venv`, build output and local databases
+  out of the build context.
 
 ## Tests and checks
 
