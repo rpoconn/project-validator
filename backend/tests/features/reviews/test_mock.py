@@ -1,6 +1,5 @@
 from typing import Any
 
-import pytest
 from anthropic import AsyncAnthropic
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from tenacity import wait_none
@@ -8,9 +7,9 @@ from tenacity import wait_none
 from src.features.projects import service as projects_service
 from src.features.projects.models import Project, ReviewStatus
 from src.features.projects.schemas import ProjectCreate
-from src.features.reviews import service as reviews_service
+from src.features.reviews.anthropic_provider import AnthropicReviewProvider
 from src.features.reviews.mock import MOCK_FAIL_MARKER, create_mock_client, get_mock_client
-from src.features.reviews.service import get_review_client, run_review
+from src.features.reviews.service import get_review_provider, run_review
 from src.shared.config import Settings
 from tests.features.projects.factories import project_payload
 
@@ -33,7 +32,7 @@ async def _run(
     await run_review(
         project.id,
         session_factory,
-        client_factory=lambda: client,
+        provider_factory=lambda _: AnthropicReviewProvider(client, "claude-mock"),
         settings=SETTINGS,
         wait=wait_none(),
     )
@@ -89,17 +88,8 @@ async def test_marker_in_existing_project_does_not_fail_new_review(
     assert project.review_status is ReviewStatus.COMPLETE
 
 
-@pytest.mark.parametrize("llm_mock", [True, False])
-def test_review_client_follows_llm_mock_setting(
-    monkeypatch: pytest.MonkeyPatch, llm_mock: bool
-) -> None:
-    real_client = AsyncAnthropic(api_key="sk-test")
-    monkeypatch.setattr(
-        reviews_service, "get_settings", lambda: Settings(_env_file=None, llm_mock=llm_mock)
-    )
-    monkeypatch.setattr(reviews_service, "get_anthropic_client", lambda: real_client)
+def test_review_provider_uses_shared_mock_client_when_enabled() -> None:
+    provider = get_review_provider(Settings(_env_file=None, llm_mock=True))
 
-    client = get_review_client()
-
-    assert (client is get_mock_client()) is llm_mock
-    assert (client is real_client) is not llm_mock
+    assert isinstance(provider, AnthropicReviewProvider)
+    assert provider.client is get_mock_client()

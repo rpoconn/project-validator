@@ -22,7 +22,23 @@ async def test_health_reports_api_key_configuration(
     assert response.status_code == 200
     assert response.json() == {
         "status": "ok",
-        "anthropic_configured": expected,
+        "llm_provider": "anthropic",
+        "llm_configured": expected,
+        "llm_mock": False,
+    }
+
+
+async def test_health_reports_openai_provider(app: FastAPI, client: AsyncClient) -> None:
+    app.dependency_overrides[get_settings] = lambda: Settings(
+        _env_file=None, llm_provider="openai", openai_api_key=SecretStr("sk-test")
+    )
+
+    response = await client.get("/api/health")
+
+    assert response.json() == {
+        "status": "ok",
+        "llm_provider": "openai",
+        "llm_configured": True,
         "llm_mock": False,
     }
 
@@ -32,7 +48,12 @@ async def test_health_reports_mock_reviews(app: FastAPI, client: AsyncClient) ->
 
     response = await client.get("/api/health")
 
-    assert response.json() == {"status": "ok", "anthropic_configured": False, "llm_mock": True}
+    assert response.json() == {
+        "status": "ok",
+        "llm_provider": "anthropic",
+        "llm_configured": False,
+        "llm_mock": True,
+    }
 
 
 async def test_openapi_spec_is_served(client: AsyncClient) -> None:

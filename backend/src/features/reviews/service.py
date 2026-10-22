@@ -1,4 +1,4 @@
-"""AI risk review: builds the prompt, calls Claude with retries, and records the outcome.
+"""AI risk review: builds the prompt, calls the configured LLM with retries, records the outcome.
 
 `run_review` is the background entry point the projects router schedules via `get_review_runner`.
 """
@@ -6,11 +6,9 @@
 import logging
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
-from typing import Final
 
-from anthropic import APIConnectionError, APIError, APIStatusError, AsyncAnthropic, transform_schema
-from anthropic.types.beta import BetaMessage, BetaMessageParam, BetaOutputConfigParam
-from pydantic import ValidationError
+import anthropic
+import openai
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from tenacity import (
     AsyncRetrying,
@@ -23,93 +21,45 @@ from tenacity.wait import wait_base
 
 from src.features.projects import service as projects_service
 from src.features.projects.schemas import ProjectRead, ProjectReview
+from src.features.reviews.anthropic_provider import AnthropicReviewProvider
 from src.features.reviews.mock import get_mock_client
+from src.features.reviews.openai_provider import OpenAIReviewProvider
 from src.features.reviews.prompt import build_prompt
+from src.features.reviews.provider import ReviewError, ReviewProvider
 from src.features.reviews.schemas import ReviewPrompt
-from src.shared.anthropic_client import get_anthropic_client
 from src.shared.config import Settings, get_settings
 from src.shared.database import session_factory as default_session_factory
+from src.shared.llm_clients import get_anthropic_client, get_openai_client
 
 logger = logging.getLogger(__name__)
 
 ReviewRunner = Callable[[int], Awaitable[None]]
+ProviderFactory = Callable[[Settings], ReviewProvider]
 
 MAX_EXISTING_PROJECTS = 50
-MAX_OUTPUT_TOKENS = 16_000
-EFFORT: Final = "medium"
-# Policy declines are re-run server-side on Anthropic's recommended fallback model.
-FALLBACK_BETA = "server-side-fallback-2026-07-01"
 RETRYABLE_STATUS_CODES = frozenset({408, 409, 429})
 DEFAULT_WAIT: wait_base = wait_random_exponential(multiplier=1, max=30)
 
-OUTPUT_CONFIG: BetaOutputConfigParam = {
-    "effort": EFFORT,
-    "format": {"type": "json_schema", "schema": transform_schema(ProjectReview)},
-}
-
-
-class ReviewError(Exception):
-    """A review attempt failed for a reason other than an API error."""
-
-    retryable = False
-
-    def __init__(self, message: str, *, request_id: str | None = None) -> None:
-        super().__init__(message)
-        self.request_id = request_id
-
-
-class ReviewRefusedError(ReviewError):
-    """Claude (and its fallback) declined the request. Retrying would decline again."""
-
-
-class MalformedReviewError(ReviewError):
-    """The response was truncated, empty or did not match `ProjectReview`."""
-
-    retryable = True
+API_ERRORS = (anthropic.APIError, openai.APIError)
+API_STATUS_ERRORS = (anthropic.APIStatusError, openai.APIStatusError)
+# Both SDKs raise their connection error for timeouts too.
+API_CONNECTION_ERRORS = (anthropic.APIConnectionError, openai.APIConnectionError)
 
 
 def is_retryable(exc: BaseException) -> bool:
     if isinstance(exc, ReviewError):
         return exc.retryable
-    if isinstance(exc, APIStatusError):
+    if isinstance(exc, API_STATUS_ERRORS):
         return exc.status_code in RETRYABLE_STATUS_CODES or exc.status_code >= 500
-    return isinstance(exc, APIConnectionError)  # includes APITimeoutError
+    return isinstance(exc, API_CONNECTION_ERRORS)
 
 
 def describe_error(exc: BaseException) -> str:
     """One-line, human-readable failure stored on the project for diagnosis."""
-    message = exc.message if isinstance(exc, APIError) else str(exc)
+    message = exc.message if isinstance(exc, API_ERRORS) else str(exc)
     description = f"{type(exc).__name__}: {message or 'no details'}"
-    request_id = exc.request_id if isinstance(exc, APIStatusError | ReviewError) else None
+    request_id = exc.request_id if isinstance(exc, (*API_STATUS_ERRORS, ReviewError)) else None
     return f"{description} (request_id={request_id})" if request_id else description
-
-
-def parse_review(response: BetaMessage) -> ProjectReview:
-    request_id = response._request_id
-    if response.stop_reason == "refusal":
-        details = response.stop_details
-        category = (details.category if details else None) or "unspecified"
-        explanation = f": {details.explanation}" if details and details.explanation else ""
-        raise ReviewRefusedError(
-            f"Claude declined to review this project (category={category}){explanation}",
-            request_id=request_id,
-        )
-    if response.stop_reason == "max_tokens":
-        raise MalformedReviewError(
-            "Review was cut off at the output token limit", request_id=request_id
-        )
-    text = "".join(block.text for block in response.content if block.type == "text")
-    if not text.strip():
-        raise MalformedReviewError("Response contained no review text", request_id=request_id)
-    try:
-        return ProjectReview.model_validate_json(text)
-    except ValidationError as exc:
-        first = exc.errors()[0]
-        location = ".".join(str(part) for part in first["loc"]) or "response"
-        raise MalformedReviewError(
-            f"Review did not match the expected format ({location}: {first['msg']})",
-            request_id=request_id,
-        ) from exc
 
 
 def _log_retry(state: RetryCallState) -> None:
@@ -122,14 +72,13 @@ def _log_retry(state: RetryCallState) -> None:
 
 
 async def request_review(
-    client: AsyncAnthropic,
+    provider: ReviewProvider,
     prompt: ReviewPrompt,
     *,
-    model: str,
     max_attempts: int,
     wait: wait_base = DEFAULT_WAIT,
 ) -> ProjectReview:
-    """Call Claude until a valid review comes back, retrying only transient failures."""
+    """Call the provider until a valid review comes back, retrying only transient failures."""
     retrying = AsyncRetrying(
         stop=stop_after_attempt(max_attempts),
         wait=wait,
@@ -137,46 +86,32 @@ async def request_review(
         before_sleep=_log_retry,
         reraise=True,
     )
-    messages: list[BetaMessageParam] = [{"role": "user", "content": prompt.user_message}]
     async for attempt in retrying:
         with attempt:
-            response = await client.beta.messages.create(
-                model=model,
-                max_tokens=MAX_OUTPUT_TOKENS,
-                system=prompt.system,
-                messages=messages,
-                output_config=OUTPUT_CONFIG,
-                betas=[FALLBACK_BETA],
-                fallbacks="default",
-            )
-            review = parse_review(response)
-            logger.info(
-                "Review generated by %s (request_id=%s, input_tokens=%s, output_tokens=%s)",
-                response.model,
-                response._request_id,
-                response.usage.input_tokens,
-                response.usage.output_tokens,
-            )
-            return review
+            return await provider.generate(prompt)
     raise AssertionError("unreachable: tenacity re-raises the last failure")
 
 
-def get_review_client() -> AsyncAnthropic:
-    """The shared Anthropic client, or the offline mock when `LLM_MOCK` is enabled."""
-    return get_mock_client() if get_settings().llm_mock else get_anthropic_client()
+def get_review_provider(settings: Settings) -> ReviewProvider:
+    """The configured provider, or the offline Anthropic mock when `LLM_MOCK` is enabled."""
+    if settings.llm_mock:
+        return AnthropicReviewProvider(get_mock_client(), settings.anthropic_model)
+    if settings.active_llm_provider == "openai":
+        return OpenAIReviewProvider(get_openai_client(), settings.openai_model)
+    return AnthropicReviewProvider(get_anthropic_client(), settings.anthropic_model)
 
 
 async def run_review(
     project_id: int,
     session_factory: async_sessionmaker[AsyncSession] = default_session_factory,
     *,
-    client_factory: Callable[[], AsyncAnthropic] = get_review_client,
+    provider_factory: ProviderFactory = get_review_provider,
     settings: Settings | None = None,
     wait: wait_base = DEFAULT_WAIT,
 ) -> None:
     """Background entry point. Opens its own sessions (the request's is closed) and never raises.
 
-    The database session is released before calling Claude so a slow review never holds a
+    The database session is released before calling the LLM so a slow review never holds a
     connection.
     """
     settings = settings or get_settings()
@@ -196,9 +131,8 @@ async def run_review(
             truncated=len(others) > MAX_EXISTING_PROJECTS,
         )
         review = await request_review(
-            client_factory(),
+            provider_factory(settings),
             prompt,
-            model=settings.anthropic_model,
             max_attempts=settings.llm_max_attempts,
             wait=wait,
         )

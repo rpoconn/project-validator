@@ -12,6 +12,7 @@ router = APIRouter(prefix="/api/health", tags=["health"])
 async def get_health(settings: Annotated[Settings, Depends(get_settings)]) -> HealthResponse:
     return HealthResponse(
         status="ok",
-        anthropic_configured=settings.anthropic_configured,
+        llm_provider=settings.active_llm_provider,
+        llm_configured=settings.llm_configured,
         llm_mock=settings.llm_mock,
     )

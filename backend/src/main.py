@@ -25,10 +25,13 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     async with session_factory() as session:
         await projects_service.reset_interrupted_reviews(session)
     settings = get_settings()
+    provider = settings.active_llm_provider
     if settings.llm_mock:
-        logger.warning("LLM_MOCK is enabled; AI reviews are canned and Claude is never called")
-    elif not settings.anthropic_configured:
-        logger.warning("ANTHROPIC_API_KEY is not configured; AI reviews will fail")
+        logger.warning("LLM_MOCK is enabled; AI reviews are canned and no LLM is ever called")
+    elif not settings.llm_configured:
+        logger.warning("%s_API_KEY is not configured; AI reviews will fail", provider.upper())
+    else:
+        logger.info("AI reviews use the %s API", provider)
     yield
 
 
