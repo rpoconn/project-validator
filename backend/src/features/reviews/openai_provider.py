@@ -1,8 +1,10 @@
 """Reviews from OpenAI models via the Responses API."""
 
+from typing import Any
+
 from openai import AsyncOpenAI
-from openai.lib._pydantic import to_strict_json_schema
 from openai.types.responses import Response, ResponseTextConfigParam
+from pydantic import BaseModel
 
 from src.features.projects.schemas import ProjectReview
 from src.features.reviews.provider import (
@@ -14,12 +16,37 @@ from src.features.reviews.provider import (
 )
 from src.features.reviews.schemas import ReviewPrompt
 
+
+def strict_json_schema(model: type[BaseModel]) -> dict[str, Any]:
+    """`model`'s JSON schema in the shape OpenAI's strict mode requires.
+
+    Strict mode rejects open objects and optional properties, so every object (nested ones and
+    `$defs` included) gets `additionalProperties: false` and lists all its properties as required.
+    """
+    schema = model.model_json_schema()
+    _close_objects(schema)
+    return schema
+
+
+def _close_objects(node: Any) -> None:
+    if isinstance(node, dict):
+        properties = node.get("properties")
+        if node.get("type") == "object" and isinstance(properties, dict):
+            node["additionalProperties"] = False
+            node["required"] = list(properties)
+        for value in node.values():
+            _close_objects(value)
+    elif isinstance(node, list):
+        for item in node:
+            _close_objects(item)
+
+
 TEXT_CONFIG: ResponseTextConfigParam = {
     "format": {
         "type": "json_schema",
         "name": "project_review",
         "strict": True,
-        "schema": to_strict_json_schema(ProjectReview),
+        "schema": strict_json_schema(ProjectReview),
     }
 }
 

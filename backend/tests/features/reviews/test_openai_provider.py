@@ -2,15 +2,45 @@ import json
 
 import pytest
 from openai.types.responses import Response
+from pydantic import BaseModel
 
 from src.features.projects.schemas import ProjectReview
-from src.features.reviews.openai_provider import parse_response
+from src.features.reviews.openai_provider import parse_response, strict_json_schema
 from src.features.reviews.provider import MalformedReviewError, ReviewRefusedError
 from src.features.reviews.schemas import ReviewPrompt
 from src.features.reviews.service import is_retryable
 from tests.features.reviews.fakes import VALID_REVIEW, make_response, scripted_openai
 
 PROMPT = ReviewPrompt(system="system", user_message="user")
+
+
+class _Owner(BaseModel):
+    name: str
+    email: str | None = None
+
+
+class _Team(BaseModel):
+    lead: _Owner
+    members: list[_Owner] = []
+
+
+def test_strict_json_schema_closes_review_object() -> None:
+    schema = strict_json_schema(ProjectReview)
+
+    assert schema["additionalProperties"] is False
+    assert schema["required"] == ["summary", "tags", "risks"]
+    assert schema["properties"]["tags"]["minItems"] == 3
+    assert schema["properties"]["tags"]["maxItems"] == 3
+
+
+def test_strict_json_schema_closes_nested_objects_and_requires_optional_fields() -> None:
+    schema = strict_json_schema(_Team)
+
+    assert schema["additionalProperties"] is False
+    assert schema["required"] == ["lead", "members"]
+    owner = schema["$defs"]["_Owner"]
+    assert owner["additionalProperties"] is False
+    assert owner["required"] == ["name", "email"]
 
 
 def test_parse_response_success() -> None:
