@@ -10,7 +10,7 @@ import { useEffect } from 'react'
 
 import { isApiError } from './errors'
 import { getProjectOptions, listProjectsOptions } from './generated/@tanstack/react-query.gen'
-import { createProject, rerunReview } from './generated/sdk.gen'
+import { createProject, deleteProject, rerunReview, updateProject } from './generated/sdk.gen'
 import type { ProjectCreate, ProjectRead } from './generated/types.gen'
 
 /** How often a project is refetched while its review is pending. */
@@ -67,6 +67,37 @@ export function useCreateProject(): UseMutationResult<ProjectRead, Error, Projec
       queryClient.setQueryData(projectOptions(project.id).queryKey, project)
       queryClient.setQueryData(listProjectsOptions().queryKey, (projects) =>
         projects ? [project, ...projects] : projects,
+      )
+      void queryClient.invalidateQueries({ queryKey: listProjectsOptions().queryKey })
+    },
+  })
+}
+
+export interface UpdateProjectVariables {
+  projectId: number
+  body: ProjectCreate
+}
+
+/** Replace a project's details; the server starts a fresh review (409 while one is running). */
+export function useUpdateProject(): UseMutationResult<ProjectRead, Error, UpdateProjectVariables> {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ projectId, body }: UpdateProjectVariables) =>
+      (await updateProject({ path: { project_id: projectId }, body, throwOnError: true })).data,
+    onSuccess: (project) => storeProject(queryClient, project),
+  })
+}
+
+export function useDeleteProject(): UseMutationResult<void, Error, number> {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async (projectId: number) => {
+      await deleteProject({ path: { project_id: projectId }, throwOnError: true })
+    },
+    onSuccess: (_, projectId) => {
+      queryClient.removeQueries({ queryKey: projectOptions(projectId).queryKey })
+      queryClient.setQueryData(listProjectsOptions().queryKey, (projects) =>
+        projects?.filter((project) => project.id !== projectId),
       )
       void queryClient.invalidateQueries({ queryKey: listProjectsOptions().queryKey })
     },

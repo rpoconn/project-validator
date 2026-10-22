@@ -3,8 +3,8 @@
 import { type DefaultError, queryOptions, type UseMutationOptions } from '@tanstack/react-query';
 
 import { client } from '../client.gen';
-import { createProject, getHealth, getProject, listProjects, type Options, rerunReview } from '../sdk.gen';
-import type { CreateProjectData, CreateProjectError, CreateProjectResponse, GetHealthData, GetHealthResponse, GetProjectData, GetProjectError, GetProjectResponse, ListProjectsData, ListProjectsResponse, RerunReviewData, RerunReviewError, RerunReviewResponse } from '../types.gen';
+import { createProject, deleteProject, getHealth, getProject, listProjects, type Options, rerunReview, updateProject } from '../sdk.gen';
+import type { CreateProjectData, CreateProjectError, CreateProjectResponse, DeleteProjectData, DeleteProjectError, DeleteProjectResponse, GetHealthData, GetHealthResponse, GetProjectData, GetProjectError, GetProjectResponse, ListProjectsData, ListProjectsResponse, RerunReviewData, RerunReviewError, RerunReviewResponse, UpdateProjectData, UpdateProjectError, UpdateProjectResponse } from '../types.gen';
 
 export type QueryKey<TOptions extends Options> = [
     Pick<TOptions, 'baseUrl' | 'body' | 'headers' | 'path' | 'query'> & {
@@ -92,6 +92,23 @@ export const createProjectMutation = (options?: Partial<Options<CreateProjectDat
     return mutationOptions;
 };
 
+/**
+ * Delete Project
+ */
+export const deleteProjectMutation = (options?: Partial<Options<DeleteProjectData>>): UseMutationOptions<DeleteProjectResponse, DeleteProjectError, Options<DeleteProjectData>> => {
+    const mutationOptions: UseMutationOptions<DeleteProjectResponse, DeleteProjectError, Options<DeleteProjectData>> = {
+        mutationFn: async (fnOptions) => {
+            const { data } = await deleteProject({
+                ...options,
+                ...fnOptions,
+                throwOnError: true
+            });
+            return data;
+        }
+    };
+    return mutationOptions;
+};
+
 export const getProjectQueryKey = (options: Options<GetProjectData>) => createQueryKey('getProject', options);
 
 /**
@@ -109,6 +126,25 @@ export const getProjectOptions = (options: Options<GetProjectData>) => queryOpti
     },
     queryKey: getProjectQueryKey(options)
 });
+
+/**
+ * Update Project
+ *
+ * Replace the project's details and review them afresh. 409 while a review is running.
+ */
+export const updateProjectMutation = (options?: Partial<Options<UpdateProjectData>>): UseMutationOptions<UpdateProjectResponse, UpdateProjectError, Options<UpdateProjectData>> => {
+    const mutationOptions: UseMutationOptions<UpdateProjectResponse, UpdateProjectError, Options<UpdateProjectData>> = {
+        mutationFn: async (fnOptions) => {
+            const { data } = await updateProject({
+                ...options,
+                ...fnOptions,
+                throwOnError: true
+            });
+            return data;
+        }
+    };
+    return mutationOptions;
+};
 
 /**
  * Rerun Review

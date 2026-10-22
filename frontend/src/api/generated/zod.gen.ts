@@ -111,6 +111,15 @@ export const zCreateProjectBody = zProjectCreate;
  */
 export const zCreateProjectResponse = zProjectRead;
 
+export const zDeleteProjectPath = z.object({
+    project_id: z.int()
+});
+
+/**
+ * Successful Response
+ */
+export const zDeleteProjectResponse = z.void();
+
 export const zGetProjectPath = z.object({
     project_id: z.int()
 });
@@ -119,6 +128,17 @@ export const zGetProjectPath = z.object({
  * Successful Response
  */
 export const zGetProjectResponse = zProjectRead;
+
+export const zUpdateProjectBody = zProjectCreate;
+
+export const zUpdateProjectPath = z.object({
+    project_id: z.int()
+});
+
+/**
+ * Successful Response
+ */
+export const zUpdateProjectResponse = zProjectRead;
 
 export const zRerunReviewPath = z.object({
     project_id: z.int()
