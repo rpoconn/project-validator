@@ -31,6 +31,12 @@ describe('ReviewPanel', () => {
     expect(screen.getByText('No risks identified.')).toBeInTheDocument()
   })
 
+  it('says when a completed review has no data', () => {
+    renderWithQueryClient(<ReviewPanel project={makeProject({ review: null })} />)
+
+    expect(screen.getByText('The review finished but returned no data.')).toBeInTheDocument()
+  })
+
   it('shows progress and no run button while pending', () => {
     renderWithQueryClient(
       <ReviewPanel project={makeProject({ review_status: 'pending', review: null })} />,

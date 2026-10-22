@@ -43,21 +43,25 @@ export function ProjectDetail({ projectId, onEdit, onDeleted }: ProjectDetailPro
     )
   }
 
-  if (isError) {
-    return isApiError(error, 404) ? (
-      <ErrorBanner title="Project not found" message={errorMessage(error)} />
-    ) : (
-      <ErrorBanner
-        title="Couldn't load the project"
-        message={errorMessage(error)}
-        onRetry={() => void refetch()}
-        retrying={isFetching}
-      />
-    )
+  const loadFailure = (title: string) => (
+    <ErrorBanner
+      title={title}
+      message={errorMessage(error)}
+      onRetry={() => void refetch()}
+      retrying={isFetching}
+    />
+  )
+
+  if (isApiError(error, 404)) {
+    return <ErrorBanner title="Project not found" message={errorMessage(error)} />
   }
+
+  if (!project) return loadFailure("Couldn't load the project")
 
   return (
     <article aria-labelledby={headingId} className="flex flex-col gap-4">
+      {/* A failed background refresh (e.g. while polling a review) keeps the last data shown. */}
+      {isError && loadFailure("Couldn't refresh the project")}
       <Card>
         <CardHeader>
           <CardTitle>

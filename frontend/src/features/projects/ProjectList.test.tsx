@@ -3,6 +3,7 @@ import { http, HttpResponse } from 'msw'
 import { describe, expect, it, vi } from 'vitest'
 
 import type { ProjectRead } from '@/api/generated/types.gen'
+import { REVIEW_POLL_INTERVAL_MS } from '@/api/projects'
 import { makeProject } from '@/test/factories'
 import { renderWithQueryClient } from '@/test/render'
 import { server } from '@/test/server'
@@ -83,5 +84,29 @@ describe('ProjectList', () => {
     await user.click(screen.getByRole('button', { name: 'Retry' }))
 
     expect(await screen.findByText('Recovered')).toBeInTheDocument()
+  })
+
+  it('keeps the projects visible when a background refresh fails', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    let calls = 0
+    server.use(
+      http.get('*/api/projects', () => {
+        calls += 1
+        return calls === 1
+          ? HttpResponse.json([makeProject({ title: 'Clinic booking', review_status: 'pending' })])
+          : HttpResponse.json({ detail: 'Database unavailable' }, { status: 503 })
+      }),
+    )
+
+    try {
+      renderList()
+      expect(await screen.findByText('Clinic booking')).toBeInTheDocument()
+      await vi.advanceTimersByTimeAsync(REVIEW_POLL_INTERVAL_MS * 2)
+
+      expect(await screen.findByText("Couldn't refresh projects")).toBeInTheDocument()
+      expect(screen.getByText('Clinic booking')).toBeInTheDocument()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

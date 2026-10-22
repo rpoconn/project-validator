@@ -1,6 +1,7 @@
 import { FolderKanbanIcon, PlusIcon } from 'lucide-react'
 
 import { errorMessage } from '@/api/errors'
+import type { ProjectRead } from '@/api/generated/types.gen'
 import { useProjects } from '@/api/projects'
 import { ErrorBanner } from '@/components/ErrorBanner'
 import { Button } from '@/components/ui/button'
@@ -35,17 +36,37 @@ export function ProjectList({ selectedId, onSelect, onCreate }: ProjectListProps
     )
   }
 
-  if (isError) {
-    return (
-      <ErrorBanner
-        title="Couldn't load projects"
-        message={errorMessage(error)}
-        onRetry={() => void refetch()}
-        retrying={isFetching}
-      />
-    )
-  }
+  const loadFailure = (title: string) => (
+    <ErrorBanner
+      title={title}
+      message={errorMessage(error)}
+      onRetry={() => void refetch()}
+      retrying={isFetching}
+    />
+  )
 
+  if (!projects) return loadFailure("Couldn't load projects")
+
+  // A failed background refresh keeps the last projects on screen beneath the error.
+  return (
+    <div className="flex flex-col gap-2">
+      {isError && loadFailure("Couldn't refresh projects")}
+      <ProjectListContent
+        projects={projects}
+        selectedId={selectedId}
+        onSelect={onSelect}
+        onCreate={onCreate}
+      />
+    </div>
+  )
+}
+
+function ProjectListContent({
+  projects,
+  selectedId,
+  onSelect,
+  onCreate,
+}: ProjectListProps & { projects: ProjectRead[] }) {
   if (projects.length === 0) {
     return (
       <Empty className="border border-dashed">

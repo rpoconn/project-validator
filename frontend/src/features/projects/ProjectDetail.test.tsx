@@ -147,6 +147,57 @@ describe('ProjectDetail', () => {
     expect(onDeleted).not.toHaveBeenCalled()
   })
 
+  it('shows a loading indicator until the project arrives', async () => {
+    const project = makeProject({ title: 'Clinic booking' })
+    serveProject(project)
+
+    renderDetail(project.id)
+
+    expect(screen.getByRole('status')).toHaveTextContent('Loading project…')
+    expect(await screen.findByRole('heading', { name: 'Clinic booking' })).toBeInTheDocument()
+  })
+
+  it('shows a load failure and recovers on retry', async () => {
+    const project = makeProject({ title: 'Recovered' })
+    let calls = 0
+    server.use(
+      http.get(`*/api/projects/${project.id}`, () => {
+        calls += 1
+        return calls === 1
+          ? HttpResponse.json({ detail: 'Database unavailable' }, { status: 503 })
+          : HttpResponse.json(project)
+      }),
+    )
+    const { user } = renderDetail(project.id)
+
+    expect(await screen.findByText("Couldn't load the project")).toBeInTheDocument()
+    expect(screen.getByText('Database unavailable')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Retry' }))
+
+    expect(await screen.findByRole('heading', { name: 'Recovered' })).toBeInTheDocument()
+  })
+
+  it('keeps the project visible when polling fails', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const pending = makeProject({ title: 'Clinic booking', review_status: 'pending', review: null })
+    let calls = 0
+    server.use(
+      http.get(`*/api/projects/${pending.id}`, () => {
+        calls += 1
+        return calls === 1
+          ? HttpResponse.json(pending)
+          : HttpResponse.json({ detail: 'Database unavailable' }, { status: 503 })
+      }),
+    )
+
+    renderDetail(pending.id)
+
+    expect(await screen.findByRole('heading', { name: 'Clinic booking' })).toBeInTheDocument()
+    await vi.advanceTimersByTimeAsync(REVIEW_POLL_INTERVAL_MS)
+    expect(await screen.findByText("Couldn't refresh the project")).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Clinic booking' })).toBeInTheDocument()
+  })
+
   it('reports a missing project', async () => {
     server.use(
       http.get('*/api/projects/999', () =>
