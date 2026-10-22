@@ -81,6 +81,39 @@ describe('ProjectFormDialog', () => {
     expect(timelinePrompt()).not.toBeInTheDocument()
   })
 
+  it('flags an inverted budget range while typing, before any submit', async () => {
+    const { user } = renderDialog()
+    const min = screen.getByLabelText('Minimum budget (USD)')
+    const max = screen.getByLabelText('Maximum budget (USD)')
+
+    await user.type(min, '500')
+    // A blank maximum isn't flagged as "Required" while the user is still entering the minimum.
+    expect(max).toHaveAttribute('aria-invalid', 'false')
+
+    await user.type(max, '100')
+    expect(max).toHaveAccessibleDescription('Maximum budget must be at least the minimum')
+
+    await user.clear(max)
+    await user.type(max, '600')
+    expect(max).toHaveAttribute('aria-invalid', 'false')
+  })
+
+  it('re-checks the range when only the minimum changes', async () => {
+    const { user } = renderDialog()
+    await fillRequiredFields(user)
+    const min = screen.getByLabelText('Minimum budget (USD)')
+    const max = screen.getByLabelText('Maximum budget (USD)')
+
+    await user.clear(min)
+    await user.type(min, '30000')
+    expect(max).toHaveAccessibleDescription('Maximum budget must be at least the minimum')
+
+    await submit(user)
+    await user.clear(min)
+    await user.type(min, '20000')
+    expect(max).toHaveAttribute('aria-invalid', 'false')
+  })
+
   it('creates the project with the API payload and reports it', async () => {
     let body: ProjectCreate | undefined
     const created = makeProject({ review_status: 'pending', review: null })

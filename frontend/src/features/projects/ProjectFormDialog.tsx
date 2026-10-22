@@ -1,7 +1,13 @@
 import { zodResolver } from '@hookform/resolvers/zod'
 import { CircleAlertIcon, PlusIcon, Trash2Icon } from 'lucide-react'
 import { type ReactNode, useEffect, useId, useState } from 'react'
-import { type FieldPath, useFieldArray, useForm, type UseFormSetError } from 'react-hook-form'
+import {
+  type FieldPath,
+  type RegisterOptions,
+  useFieldArray,
+  useForm,
+  type UseFormSetError,
+} from 'react-hook-form'
 
 import { errorMessage, isApiError, validationIssues } from '@/api/errors'
 import type { ProjectRead } from '@/api/generated/types.gen'
@@ -222,6 +228,9 @@ function ProjectForm({ mode, defaultValues, saving, onDirtyChange, onSubmit }: P
     control,
     handleSubmit,
     setError,
+    getValues,
+    getFieldState,
+    trigger,
     formState: { errors, isDirty },
   } = useForm<ProjectFormInput, unknown, ProjectFormOutput>({
     resolver: zodResolver(projectFormSchema, { error: projectFormErrorMap }),
@@ -239,13 +248,28 @@ function ProjectForm({ mode, defaultValues, saving, onDirtyChange, onSubmit }: P
   const idPrefix = useId()
   const idFor = (name: FieldPath<ProjectFormInput>) => `${idPrefix}-${name}`
   /** Registration plus the id and error link that `FormField` expects. */
-  const inputProps = (name: FieldPath<ProjectFormInput>, error: FieldErrorValue) => ({
+  const inputProps = (
+    name: FieldPath<ProjectFormInput>,
+    error: FieldErrorValue,
+    options?: RegisterOptions<ProjectFormInput>,
+  ) => ({
     id: idFor(name),
     'aria-required': true,
     'aria-invalid': !!error,
     'aria-describedby': error ? `${idFor(name)}-error` : undefined,
-    ...register(name),
+    ...register(name, options),
   })
+
+  // The range error lives on the maximum, so re-check it as either budget changes rather than
+  // waiting for submit (or, after submit, for the maximum itself to change). A maximum that is
+  // still blank and error-free is left alone so the user isn't told "Required" mid-entry.
+  const budgetOptions: RegisterOptions<ProjectFormInput> = {
+    onChange: () => {
+      if (getValues('budget_max').trim() || getFieldState('budget_max').error) {
+        void trigger('budget_max')
+      }
+    },
+  }
 
   const timelineError = errors.timeline?.root?.message ?? errors.timeline?.message
 
@@ -300,7 +324,7 @@ function ProjectForm({ mode, defaultValues, saving, onDirtyChange, onSubmit }: P
               inputMode="numeric"
               min={0}
               step={1}
-              {...inputProps('budget_min', errors.budget_min)}
+              {...inputProps('budget_min', errors.budget_min, budgetOptions)}
             />
           </FormField>
           <FormField
@@ -313,7 +337,7 @@ function ProjectForm({ mode, defaultValues, saving, onDirtyChange, onSubmit }: P
               inputMode="numeric"
               min={0}
               step={1}
-              {...inputProps('budget_max', errors.budget_max)}
+              {...inputProps('budget_max', errors.budget_max, budgetOptions)}
             />
           </FormField>
         </div>
