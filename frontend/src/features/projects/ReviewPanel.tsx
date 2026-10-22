@@ -78,7 +78,8 @@ function ReviewBody({ project }: { project: ProjectRead }): ReactElement {
             Analyzing project…
           </p>
           <p className="text-muted-foreground">
-            Claude is comparing it with your other projects. This usually takes 10–30 seconds.
+            The AI reviewer is comparing it with your other projects. This usually takes 10–30
+            seconds.
           </p>
         </div>
       )

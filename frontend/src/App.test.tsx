@@ -3,14 +3,23 @@ import { http, HttpResponse } from 'msw'
 import { beforeEach, describe, expect, it } from 'vitest'
 
 import App from './App'
-import type { HealthResponse, ProjectCreate, ProjectRead } from './api/generated/types.gen'
+import type {
+  HealthResponse,
+  LlmProvider,
+  ProjectCreate,
+  ProjectRead,
+} from './api/generated/types.gen'
 import { makeProject } from './test/factories'
 import { renderWithQueryClient } from './test/render'
 import { server } from './test/server'
 
-const healthy = (anthropic_configured: boolean, llm_mock = false) =>
+const healthy = (
+  llm_configured: boolean,
+  llm_mock = false,
+  llm_provider: LlmProvider = 'anthropic',
+) =>
   http.get('*/api/health', () =>
-    HttpResponse.json<HealthResponse>({ status: 'ok', anthropic_configured, llm_mock }),
+    HttpResponse.json<HealthResponse>({ status: 'ok', llm_provider, llm_configured, llm_mock }),
   )
 
 describe('App', () => {
@@ -18,16 +27,25 @@ describe('App', () => {
     server.use(healthy(true))
   })
 
-  it('warns when the backend has no Anthropic key', async () => {
-    server.use(
-      healthy(false),
-      http.get('*/api/projects', () => HttpResponse.json([])),
-    )
+  it.each([
+    ['anthropic', 'Anthropic', 'ANTHROPIC_API_KEY'],
+    ['openai', 'OpenAI', 'OPENAI_API_KEY'],
+  ] as const)(
+    'warns when the backend has no key for its %s provider',
+    async (provider, name, keyVar) => {
+      server.use(
+        healthy(false, false, provider),
+        http.get('*/api/projects', () => HttpResponse.json([])),
+      )
 
-    renderWithQueryClient(<App />)
+      renderWithQueryClient(<App />)
 
-    expect(await screen.findByText('AI reviews are unavailable')).toBeInTheDocument()
-  })
+      expect(await screen.findByText('AI reviews are unavailable')).toBeInTheDocument()
+      expect(
+        screen.getByText(new RegExp(`Reviews use ${name}, but the backend has no ${keyVar}`)),
+      ).toBeInTheDocument()
+    },
+  )
 
   it('says when reviews are mocked instead of warning about the missing key', async () => {
     server.use(

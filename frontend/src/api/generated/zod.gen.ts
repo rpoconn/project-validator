@@ -2,12 +2,15 @@
 
 import * as z from 'zod';
 
+export const zLlmProvider = z.enum(['anthropic', 'openai']);
+
 /**
  * HealthResponse
  */
 export const zHealthResponse = z.object({
     status: z.literal('ok'),
-    anthropic_configured: z.boolean(),
+    llm_provider: zLlmProvider,
+    llm_configured: z.boolean(),
     llm_mock: z.boolean()
 });
 

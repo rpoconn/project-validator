@@ -22,15 +22,18 @@ export type HealthResponse = {
      * Status
      */
     status: 'ok';
+    llm_provider: LlmProvider;
     /**
-     * Anthropic Configured
+     * Llm Configured
      */
-    anthropic_configured: boolean;
+    llm_configured: boolean;
     /**
      * Llm Mock
      */
     llm_mock: boolean;
 };
+
+export type LlmProvider = 'anthropic' | 'openai';
 
 /**
  * ProjectCreate

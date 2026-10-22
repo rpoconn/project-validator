@@ -300,9 +300,12 @@
             "const": "ok",
             "title": "Status"
           },
-          "anthropic_configured": {
+          "llm_provider": {
+            "$ref": "#/components/schemas/LLMProvider"
+          },
+          "llm_configured": {
             "type": "boolean",
-            "title": "Anthropic Configured"
+            "title": "Llm Configured"
           },
           "llm_mock": {
             "type": "boolean",
@@ -312,10 +315,18 @@
         "type": "object",
         "required": [
           "status",
-          "anthropic_configured",
+          "llm_provider",
+          "llm_configured",
           "llm_mock"
         ],
         "title": "HealthResponse"
+      },
+      "LLMProvider": {
+        "type": "string",
+        "enum": [
+          "anthropic",
+          "openai"
+        ]
       },
       "ProjectCreate": {
         "properties": {

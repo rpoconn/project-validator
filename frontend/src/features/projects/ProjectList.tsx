@@ -76,7 +76,7 @@ function ProjectListContent({
           </EmptyMedia>
           <EmptyTitle>No projects yet</EmptyTitle>
           <EmptyDescription>
-            Add a project and Claude will review it against the rest of your portfolio.
+            Add a project to get an AI review against the rest of your portfolio.
           </EmptyDescription>
         </EmptyHeader>
         <EmptyContent>

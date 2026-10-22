@@ -72,7 +72,7 @@ const COPY: Record<
 > = {
   create: {
     title: 'New project',
-    description: 'Claude reviews each new project against your existing portfolio.',
+    description: 'Each new project gets an AI review against your existing portfolio.',
     submit: 'Create project',
     submitting: 'Creating…',
     failed: "Couldn't create the project",
