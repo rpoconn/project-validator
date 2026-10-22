@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest'
 
+import { makeProject } from '@/test/factories'
+
 import {
   emptyProjectForm,
   type ProjectFormInput,
   projectFormErrorMap,
   projectFormSchema,
+  toProjectFormInput,
 } from './projectForm.schema'
 
 const validInput: ProjectFormInput = {
@@ -30,6 +33,34 @@ describe('projectFormSchema', () => {
       title: 'Clinic scheduling',
       description: 'Rebuild the booking flow.',
       industry: 'Healthcare',
+      budget_min: 10000,
+      budget_max: 25000,
+      timeline: [{ goal: 'Beta', due_at: '2026-12-01T00:00:00.000Z' }],
+    })
+  })
+
+  it('turns an existing project into form input that parses back to the same payload', () => {
+    const project = makeProject({
+      title: 'Clinic scheduling',
+      budget_min: 10000,
+      budget_max: 25000,
+      timeline: [{ goal: 'Beta', due_at: '2026-12-01T00:00:00Z' }],
+    })
+
+    const input = toProjectFormInput(project)
+
+    expect(input).toEqual({
+      title: 'Clinic scheduling',
+      description: project.description,
+      industry: project.industry,
+      budget_min: '10000',
+      budget_max: '25000',
+      timeline: [{ goal: 'Beta', due_at: '2026-12-01' }],
+    })
+    expect(projectFormSchema.parse(input)).toEqual({
+      title: 'Clinic scheduling',
+      description: project.description,
+      industry: project.industry,
       budget_min: 10000,
       budget_max: 25000,
       timeline: [{ goal: 'Beta', due_at: '2026-12-01T00:00:00.000Z' }],

@@ -10,13 +10,13 @@ import { server } from '@/test/server'
 
 import { ProjectFormDialog } from './ProjectFormDialog'
 
-function renderDialog() {
-  const onCreated = vi.fn<(project: ProjectRead) => void>()
+function renderDialog(project?: ProjectRead) {
+  const onSaved = vi.fn<(project: ProjectRead) => void>()
   const onOpenChange = vi.fn<(open: boolean) => void>()
   const result = renderWithQueryClient(
-    <ProjectFormDialog open onOpenChange={onOpenChange} onCreated={onCreated} />,
+    <ProjectFormDialog open onOpenChange={onOpenChange} project={project} onSaved={onSaved} />,
   )
-  return { ...result, onCreated, onOpenChange }
+  return { ...result, onSaved, onOpenChange }
 }
 
 async function fillRequiredFields(user: UserEvent) {
@@ -27,13 +27,32 @@ async function fillRequiredFields(user: UserEvent) {
   await user.type(screen.getByLabelText('Maximum budget (USD)'), '25000')
 }
 
-const submit = (user: UserEvent) =>
-  user.click(screen.getByRole('button', { name: 'Create project' }))
+async function addMilestone(user: UserEvent, goal: string, dueDate: string) {
+  await user.click(screen.getByRole('button', { name: 'Add milestone' }))
+  const index = screen.getAllByLabelText(/Milestone \d+ goal/).length
+  await user.type(screen.getByLabelText(`Milestone ${index} goal`), goal)
+  await user.type(screen.getByLabelText(`Milestone ${index} due date`), dueDate)
+}
+
+const submit = (user: UserEvent, label = 'Create project') =>
+  user.click(screen.getByRole('button', { name: label }))
+
+const timelinePrompt = () => screen.queryByRole('alertdialog', { name: 'No milestones yet' })
 
 describe('ProjectFormDialog', () => {
+  it('marks every field as required and explains the mark', () => {
+    renderDialog()
+
+    const dialog = screen.getByRole('dialog', { name: 'New project' })
+    expect(within(dialog).getByText('Required field')).toBeInTheDocument()
+    for (const label of ['Title', 'Description', 'Industry', 'Maximum budget (USD)']) {
+      expect(screen.getByLabelText(label)).toHaveAttribute('aria-required', 'true')
+    }
+  })
+
   it('shows field errors for an empty form without calling the API', async () => {
     // Any request would fail the test: MSW errors on unhandled requests.
-    const { user, onCreated } = renderDialog()
+    const { user, onSaved } = renderDialog()
 
     await submit(user)
 
@@ -43,7 +62,9 @@ describe('ProjectFormDialog', () => {
       expect(input).toHaveAccessibleDescription('Required')
     }
     expect(screen.getByLabelText('Minimum budget (USD)')).toHaveAccessibleDescription('Required')
-    expect(onCreated).not.toHaveBeenCalled()
+    expect(screen.getByLabelText('Title')).toHaveFocus()
+    expect(timelinePrompt()).not.toBeInTheDocument()
+    expect(onSaved).not.toHaveBeenCalled()
   })
 
   it('rejects a maximum budget below the minimum', async () => {
@@ -54,9 +75,10 @@ describe('ProjectFormDialog', () => {
 
     await submit(user)
 
-    expect(screen.getByLabelText('Maximum budget (USD)')).toHaveAccessibleDescription(
-      'Maximum budget must be at least the minimum',
-    )
+    const max = screen.getByLabelText('Maximum budget (USD)')
+    expect(max).toHaveAttribute('aria-invalid', 'true')
+    expect(max).toHaveAccessibleDescription('Maximum budget must be at least the minimum')
+    expect(timelinePrompt()).not.toBeInTheDocument()
   })
 
   it('creates the project with the API payload and reports it', async () => {
@@ -68,15 +90,14 @@ describe('ProjectFormDialog', () => {
         return HttpResponse.json(created, { status: 201 })
       }),
     )
-    const { user, onCreated } = renderDialog()
+    const { user, onSaved } = renderDialog()
     await fillRequiredFields(user)
-    await user.click(screen.getByRole('button', { name: 'Add milestone' }))
-    await user.type(screen.getByLabelText('Milestone 1 goal'), 'Beta')
-    await user.type(screen.getByLabelText('Milestone 1 due date'), '2026-12-01')
+    await addMilestone(user, 'Beta', '2026-12-01')
 
     await submit(user)
 
-    await vi.waitFor(() => expect(onCreated).toHaveBeenCalledWith(created))
+    await vi.waitFor(() => expect(onSaved).toHaveBeenCalledWith(created))
+    expect(timelinePrompt()).not.toBeInTheDocument()
     expect(body).toEqual({
       title: 'Clinic booking',
       description: 'Rebuild the booking flow.',
@@ -85,6 +106,35 @@ describe('ProjectFormDialog', () => {
       budget_max: 25000,
       timeline: [{ goal: 'Beta', due_at: '2026-12-01T00:00:00.000Z' }],
     })
+  })
+
+  it('checks before saving a project with no milestones', async () => {
+    let body: ProjectCreate | undefined
+    const created = makeProject({ review_status: 'pending', review: null })
+    server.use(
+      http.post('*/api/projects', async ({ request }) => {
+        body = (await request.json()) as ProjectCreate
+        return HttpResponse.json(created, { status: 201 })
+      }),
+    )
+    const { user, onSaved } = renderDialog()
+    await fillRequiredFields(user)
+
+    await submit(user)
+
+    // Choosing to add one returns to the form with an empty milestone row ready.
+    const prompt = await screen.findByRole('alertdialog', { name: 'No milestones yet' })
+    await user.click(within(prompt).getByRole('button', { name: 'Add a milestone' }))
+    expect(timelinePrompt()).not.toBeInTheDocument()
+    expect(screen.getByLabelText('Milestone 1 goal')).toHaveValue('')
+    expect(onSaved).not.toHaveBeenCalled()
+
+    await user.click(screen.getByRole('button', { name: 'Remove milestone 1' }))
+    await submit(user)
+    await user.click(await screen.findByRole('button', { name: 'Create anyway' }))
+
+    await vi.waitFor(() => expect(onSaved).toHaveBeenCalledWith(created))
+    expect(body?.timeline).toEqual([])
   })
 
   it('validates and removes milestones', async () => {
@@ -115,8 +165,9 @@ describe('ProjectFormDialog', () => {
         ),
       ),
     )
-    const { user, onCreated } = renderDialog()
+    const { user, onSaved } = renderDialog()
     await fillRequiredFields(user)
+    await addMilestone(user, 'Beta', '2026-12-01')
 
     await submit(user)
 
@@ -126,17 +177,127 @@ describe('ProjectFormDialog', () => {
     expect(
       within(formAlert as HTMLElement).getByText('Something about the whole body'),
     ).toBeVisible()
-    expect(onCreated).not.toHaveBeenCalled()
+    expect(onSaved).not.toHaveBeenCalled()
   })
 
   it('shows other failures at the top of the form', async () => {
     server.use(http.post('*/api/projects', () => HttpResponse.error()))
     const { user } = renderDialog()
     await fillRequiredFields(user)
+    await addMilestone(user, 'Beta', '2026-12-01')
 
     await submit(user)
 
     expect(await screen.findByText(/Could not reach the server/)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Create project' })).toBeEnabled()
+  })
+
+  describe('closing', () => {
+    it('closes straight away when nothing has been entered', async () => {
+      const { user, onOpenChange } = renderDialog()
+
+      await user.click(screen.getByRole('button', { name: 'Cancel' }))
+
+      expect(onOpenChange).toHaveBeenCalledWith(false)
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+    })
+
+    it('asks before discarding entered details, whichever way the dialog is closed', async () => {
+      const { user, onOpenChange } = renderDialog()
+      await user.type(screen.getByLabelText('Title'), 'Half-written')
+
+      await user.keyboard('{Escape}')
+
+      const prompt = screen.getByRole('alertdialog', { name: 'Discard this project?' })
+      expect(
+        within(prompt).getByText("The details you've entered haven't been saved."),
+      ).toBeVisible()
+      expect(onOpenChange).not.toHaveBeenCalled()
+
+      await user.click(within(prompt).getByRole('button', { name: 'Keep editing' }))
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+      expect(screen.getByLabelText('Title')).toHaveValue('Half-written')
+      expect(onOpenChange).not.toHaveBeenCalled()
+
+      await user.click(screen.getByRole('button', { name: 'Close' }))
+      await user.click(screen.getByRole('button', { name: 'Discard' }))
+      expect(onOpenChange).toHaveBeenCalledWith(false)
+    })
+  })
+
+  describe('editing', () => {
+    const existing = makeProject({
+      title: 'Clinic booking',
+      description: 'Rebuild the booking flow.',
+      industry: 'Healthcare',
+      budget_min: 10000,
+      budget_max: 25000,
+      timeline: [{ goal: 'Beta', due_at: '2026-12-01T00:00:00Z' }],
+    })
+
+    it('starts from the project and saves changes with PUT', async () => {
+      let body: ProjectCreate | undefined
+      const saved = { ...existing, title: 'Clinic booking v2', review_status: 'pending' as const }
+      server.use(
+        http.put(`*/api/projects/${existing.id}`, async ({ request }) => {
+          body = (await request.json()) as ProjectCreate
+          return HttpResponse.json(saved)
+        }),
+      )
+      const { user, onSaved, onOpenChange } = renderDialog(existing)
+
+      const dialog = screen.getByRole('dialog', { name: 'Edit project' })
+      expect(within(dialog).getByLabelText('Title')).toHaveValue('Clinic booking')
+      expect(within(dialog).getByLabelText('Minimum budget (USD)')).toHaveValue(10000)
+      expect(within(dialog).getByLabelText('Milestone 1 due date')).toHaveValue('2026-12-01')
+
+      // Nothing changed yet, so closing needs no confirmation.
+      await user.keyboard('{Escape}')
+      expect(onOpenChange).toHaveBeenCalledWith(false)
+
+      await user.type(screen.getByLabelText('Title'), ' v2')
+      await submit(user, 'Save changes')
+
+      await vi.waitFor(() => expect(onSaved).toHaveBeenCalledWith(saved))
+      expect(body).toEqual({
+        title: 'Clinic booking v2',
+        description: 'Rebuild the booking flow.',
+        industry: 'Healthcare',
+        budget_min: 10000,
+        budget_max: 25000,
+        timeline: [{ goal: 'Beta', due_at: '2026-12-01T00:00:00.000Z' }],
+      })
+    })
+
+    it('asks before discarding changes', async () => {
+      const { user, onOpenChange } = renderDialog(existing)
+      await user.type(screen.getByLabelText('Title'), ' v2')
+
+      await user.click(screen.getByRole('button', { name: 'Cancel' }))
+
+      expect(screen.getByRole('alertdialog', { name: 'Discard your changes?' })).toBeInTheDocument()
+      expect(onOpenChange).not.toHaveBeenCalled()
+    })
+
+    it('explains a save rejected while a review is running', async () => {
+      server.use(
+        http.put(`*/api/projects/${existing.id}`, () =>
+          HttpResponse.json(
+            { detail: `Project ${existing.id} already has a review in progress` },
+            { status: 409 },
+          ),
+        ),
+      )
+      const { user, onSaved } = renderDialog(existing)
+      await user.type(screen.getByLabelText('Title'), ' v2')
+
+      await submit(user, 'Save changes')
+
+      const alert = await screen.findByText("Couldn't save the project")
+      expect(alert.closest('[role="alert"]')).toHaveTextContent(
+        'A review of this project is still running. Wait for it to finish, then try again.',
+      )
+      expect(onSaved).not.toHaveBeenCalled()
+    })
   })
 })

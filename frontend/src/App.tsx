@@ -54,7 +54,7 @@ export default function App() {
       <ProjectFormDialog
         open={formOpen}
         onOpenChange={setFormOpen}
-        onCreated={(project) => {
+        onSaved={(project) => {
           setSelectedId(project.id)
           setFormOpen(false)
         }}

@@ -83,6 +83,8 @@ describe('App', () => {
     await user.type(within(dialog).getByLabelText('Minimum budget (USD)'), '1000')
     await user.type(within(dialog).getByLabelText('Maximum budget (USD)'), '2000')
     await user.click(within(dialog).getByRole('button', { name: 'Create project' }))
+    // No milestones were added, so the form checks first.
+    await user.click(await screen.findByRole('button', { name: 'Create anyway' }))
 
     expect(await screen.findByRole('heading', { name: 'Clinic booking' })).toBeInTheDocument()
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()

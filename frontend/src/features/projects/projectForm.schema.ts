@@ -1,5 +1,6 @@
 import { z } from 'zod'
 
+import type { ProjectRead } from '../../api/generated/types.gen'
 import { zProjectCreate, zTimelineItem } from '../../api/generated/zod.gen'
 
 // Field rules come from the generated (backend-derived) schemas; this file only adapts raw input
@@ -51,6 +52,18 @@ export const emptyProjectForm: ProjectFormInput = {
 }
 
 export const emptyTimelineItem: ProjectFormInput['timeline'][number] = { goal: '', due_at: '' }
+
+/** The inverse of the schema's transforms: an existing project as the form's raw input values. */
+export function toProjectFormInput(project: ProjectRead): ProjectFormInput {
+  return {
+    title: project.title,
+    description: project.description,
+    industry: project.industry,
+    budget_min: String(project.budget_min),
+    budget_max: String(project.budget_max),
+    timeline: project.timeline.map(({ goal, due_at }) => ({ goal, due_at: due_at.slice(0, 10) })),
+  }
+}
 
 /** Friendly messages for the generated schemas' built-in checks. */
 export const projectFormErrorMap: z.core.$ZodErrorMap = (issue) => {

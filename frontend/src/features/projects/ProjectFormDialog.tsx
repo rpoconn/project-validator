@@ -1,11 +1,12 @@
 import { zodResolver } from '@hookform/resolvers/zod'
 import { CircleAlertIcon, PlusIcon, Trash2Icon } from 'lucide-react'
-import { type ReactNode, useId } from 'react'
+import { type ReactNode, useEffect, useId, useState } from 'react'
 import { type FieldPath, useFieldArray, useForm, type UseFormSetError } from 'react-hook-form'
 
-import { errorMessage, validationIssues } from '@/api/errors'
+import { errorMessage, isApiError, validationIssues } from '@/api/errors'
 import type { ProjectRead } from '@/api/generated/types.gen'
-import { useCreateProject } from '@/api/projects'
+import { useCreateProject, useUpdateProject } from '@/api/projects'
+import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import {
@@ -36,6 +37,7 @@ import {
   type ProjectFormOutput,
   projectFormErrorMap,
   projectFormSchema,
+  toProjectFormInput,
 } from './projectForm.schema'
 
 const INDUSTRY_SUGGESTIONS = [
@@ -53,60 +55,185 @@ const INDUSTRY_SUGGESTIONS = [
   'Hospitality',
 ]
 
+type FormMode = 'create' | 'edit'
+
+const COPY: Record<
+  FormMode,
+  {
+    title: string
+    description: string
+    submit: string
+    submitting: string
+    failed: string
+    discardTitle: string
+    discardDescription: string
+    proceedWithoutTimeline: string
+  }
+> = {
+  create: {
+    title: 'New project',
+    description: 'Claude reviews each new project against your existing portfolio.',
+    submit: 'Create project',
+    submitting: 'Creating…',
+    failed: "Couldn't create the project",
+    discardTitle: 'Discard this project?',
+    discardDescription: "The details you've entered haven't been saved.",
+    proceedWithoutTimeline: 'Create anyway',
+  },
+  edit: {
+    title: 'Edit project',
+    description: 'Saving starts a fresh AI review of the updated details.',
+    submit: 'Save changes',
+    submitting: 'Saving…',
+    failed: "Couldn't save the project",
+    discardTitle: 'Discard your changes?',
+    discardDescription: "Your changes haven't been saved.",
+    proceedWithoutTimeline: 'Save anyway',
+  },
+}
+
 interface ProjectFormDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
-  onCreated: (project: ProjectRead) => void
+  /** When set, the dialog edits this project instead of creating a new one. */
+  project?: ProjectRead
+  onSaved: (project: ProjectRead) => void
 }
 
-export function ProjectFormDialog({ open, onOpenChange, onCreated }: ProjectFormDialogProps) {
+export function ProjectFormDialog({
+  open,
+  onOpenChange,
+  project,
+  onSaved,
+}: ProjectFormDialogProps) {
   const createProject = useCreateProject()
+  const updateProject = useUpdateProject()
+  const saving = createProject.isPending || updateProject.isPending
+  const [dirty, setDirty] = useState(false)
+  const [confirmDiscard, setConfirmDiscard] = useState(false)
+  // A valid submission waiting for the user to confirm saving without any milestones.
+  const [withoutTimeline, setWithoutTimeline] = useState<Submission | null>(null)
+
+  const mode: FormMode = project ? 'edit' : 'create'
+  const copy = COPY[mode]
+
+  // Every way of closing (overlay click, Escape, the X and Cancel buttons) comes through here.
+  const requestClose = (next: boolean) => {
+    // Stay open while saving so the result (or a validation error) isn't lost.
+    if (saving) return
+    if (!next && dirty) {
+      setConfirmDiscard(true)
+      return
+    }
+    onOpenChange(next)
+  }
+
+  const save = ({ values, form }: Submission) => {
+    const callbacks = {
+      onSuccess: (saved: ProjectRead) => onSaved(saved),
+      onError: (error: unknown) => applyServerErrors(error, form.setError),
+    }
+    if (project) updateProject.mutate({ projectId: project.id, body: values }, callbacks)
+    else createProject.mutate(values, callbacks)
+  }
+
+  const submit = (submission: Submission) => {
+    // An empty timeline is valid but usually an oversight, so check before saving.
+    if (submission.values.timeline.length === 0) setWithoutTimeline(submission)
+    else save(submission)
+  }
 
   return (
-    <Dialog
-      open={open}
-      // Stay open while saving so the result (or a validation error) isn't lost.
-      onOpenChange={(next) => !createProject.isPending && onOpenChange(next)}
-    >
+    <Dialog open={open} onOpenChange={requestClose}>
       <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-xl">
         <DialogHeader>
-          <DialogTitle>New project</DialogTitle>
-          <DialogDescription>
-            Claude reviews each new project against your existing portfolio.
-          </DialogDescription>
+          <DialogTitle>{copy.title}</DialogTitle>
+          <DialogDescription>{copy.description}</DialogDescription>
+          <p className="text-xs text-muted-foreground">
+            <RequiredMark /> Required field
+          </p>
         </DialogHeader>
-        {/* Content unmounts when the dialog closes, so the form starts empty each time. */}
+        {/* Content unmounts when the dialog closes, so the form starts fresh each time. */}
         <ProjectForm
-          saving={createProject.isPending}
-          onSubmit={(values, setError) =>
-            createProject.mutate(values, {
-              onSuccess: (project) => onCreated(project),
-              onError: (error) => applyServerErrors(error, setError),
-            })
-          }
+          mode={mode}
+          defaultValues={project ? toProjectFormInput(project) : emptyProjectForm}
+          saving={saving}
+          onDirtyChange={setDirty}
+          onSubmit={submit}
+        />
+
+        {/*
+          The prompts render inside the dialog's React tree so Radix treats clicks on them as
+          inside the dialog; as siblings, a click on a prompt could also dismiss the dialog.
+        */}
+        <ConfirmDialog
+          open={confirmDiscard}
+          onOpenChange={setConfirmDiscard}
+          title={copy.discardTitle}
+          description={copy.discardDescription}
+          cancelLabel="Keep editing"
+          confirmLabel="Discard"
+          destructive
+          onConfirm={() => {
+            setConfirmDiscard(false)
+            onOpenChange(false)
+          }}
+        />
+
+        <ConfirmDialog
+          open={withoutTimeline !== null}
+          onOpenChange={(next) => !next && setWithoutTimeline(null)}
+          title="No milestones yet"
+          description="Most projects have at least one milestone, so this may be an oversight. Save it without a timeline?"
+          cancelLabel="Add a milestone"
+          confirmLabel={copy.proceedWithoutTimeline}
+          onCancel={() => withoutTimeline?.form.addMilestone()}
+          onConfirm={() => {
+            if (withoutTimeline) save(withoutTimeline)
+            setWithoutTimeline(null)
+          }}
         />
       </DialogContent>
     </Dialog>
   )
 }
 
-interface ProjectFormProps {
-  saving: boolean
-  onSubmit: (values: ProjectFormOutput, setError: UseFormSetError<ProjectFormInput>) => void
+/** What the form hands back on submit: the API payload plus hooks back into the form. */
+interface Submission {
+  values: ProjectFormOutput
+  form: {
+    setError: UseFormSetError<ProjectFormInput>
+    addMilestone: () => void
+  }
 }
 
-function ProjectForm({ saving, onSubmit }: ProjectFormProps) {
+interface ProjectFormProps {
+  mode: FormMode
+  defaultValues: ProjectFormInput
+  saving: boolean
+  onDirtyChange: (dirty: boolean) => void
+  onSubmit: (submission: Submission) => void
+}
+
+function ProjectForm({ mode, defaultValues, saving, onDirtyChange, onSubmit }: ProjectFormProps) {
+  const copy = COPY[mode]
   const {
     register,
     control,
     handleSubmit,
     setError,
-    formState: { errors },
+    formState: { errors, isDirty },
   } = useForm<ProjectFormInput, unknown, ProjectFormOutput>({
     resolver: zodResolver(projectFormSchema, { error: projectFormErrorMap }),
-    defaultValues: emptyProjectForm,
+    defaultValues,
   })
   const timeline = useFieldArray({ control, name: 'timeline' })
+
+  // Let the dialog know whether closing would lose anything; a closed form has nothing to lose.
+  useEffect(() => {
+    onDirtyChange(isDirty)
+    return () => onDirtyChange(false)
+  }, [isDirty, onDirtyChange])
 
   // useId keeps these unique even when other elements on the page use similar names.
   const idPrefix = useId()
@@ -114,6 +241,7 @@ function ProjectForm({ saving, onSubmit }: ProjectFormProps) {
   /** Registration plus the id and error link that `FormField` expects. */
   const inputProps = (name: FieldPath<ProjectFormInput>, error: FieldErrorValue) => ({
     id: idFor(name),
+    'aria-required': true,
     'aria-invalid': !!error,
     'aria-describedby': error ? `${idFor(name)}-error` : undefined,
     ...register(name),
@@ -122,12 +250,20 @@ function ProjectForm({ saving, onSubmit }: ProjectFormProps) {
   const timelineError = errors.timeline?.root?.message ?? errors.timeline?.message
 
   return (
-    <form noValidate onSubmit={handleSubmit((values) => onSubmit(values, setError))}>
+    <form
+      noValidate
+      onSubmit={handleSubmit((values) =>
+        onSubmit({
+          values,
+          form: { setError, addMilestone: () => timeline.append(emptyTimelineItem) },
+        }),
+      )}
+    >
       <FieldGroup>
         {errors.root?.server && (
           <Alert variant="destructive">
             <CircleAlertIcon />
-            <AlertTitle>Couldn't create the project</AlertTitle>
+            <AlertTitle>{copy.failed}</AlertTitle>
             <AlertDescription>{errors.root.server.message}</AlertDescription>
           </Alert>
         )}
@@ -244,10 +380,19 @@ function ProjectForm({ saving, onSubmit }: ProjectFormProps) {
         </DialogClose>
         <Button type="submit" disabled={saving}>
           {saving && <Spinner data-icon="inline-start" aria-hidden="true" />}
-          {saving ? 'Creating…' : 'Create project'}
+          {saving ? copy.submitting : copy.submit}
         </Button>
       </DialogFooter>
     </form>
+  )
+}
+
+/** The asterisk that marks a required field; the note under the dialog title explains it. */
+function RequiredMark() {
+  return (
+    <span aria-hidden="true" className="text-destructive">
+      *
+    </span>
   )
 }
 
@@ -261,13 +406,24 @@ interface FormFieldProps {
   children: ReactNode
 }
 
-/** Label, control and error message; the control must use `inputId` (see `inputProps`). */
+/**
+ * Label, control and error message for one of the form's (all required) fields; the control must
+ * use `inputId` (see `inputProps`).
+ */
 function FormField({ inputId, label, error, hideLabel = false, children }: FormFieldProps) {
   return (
     <Field data-invalid={!!error}>
-      <FieldLabel htmlFor={inputId} className={hideLabel ? 'sr-only' : undefined}>
-        {label}
-      </FieldLabel>
+      {hideLabel ? (
+        <FieldLabel htmlFor={inputId} className="sr-only">
+          {label}
+        </FieldLabel>
+      ) : (
+        // The mark sits outside the label so the field's accessible name stays just the label.
+        <div className="flex w-fit items-baseline gap-1">
+          <FieldLabel htmlFor={inputId}>{label}</FieldLabel>
+          <RequiredMark />
+        </div>
+      )}
       {children}
       <FieldError id={`${inputId}-error`} errors={[error]} />
     </Field>
@@ -280,7 +436,10 @@ const FORM_FIELD_PATH =
 const isFormFieldPath = (path: string): path is FieldPath<ProjectFormInput> =>
   FORM_FIELD_PATH.test(path)
 
-/** Show a failed create on the form: 422 issues on their fields, anything else at the top. */
+const REVIEW_IN_PROGRESS_MESSAGE =
+  'A review of this project is still running. Wait for it to finish, then try again.'
+
+/** Show a failed save on the form: 422 issues on their fields, anything else at the top. */
 function applyServerErrors(error: unknown, setError: UseFormSetError<ProjectFormInput>): void {
   const issues = validationIssues(error)
   const unplaced: string[] = []
@@ -288,6 +447,8 @@ function applyServerErrors(error: unknown, setError: UseFormSetError<ProjectForm
     if (isFormFieldPath(path)) setError(path, { type: 'server', message })
     else unplaced.push(message)
   }
-  if (issues.length === 0) unplaced.push(errorMessage(error))
+  if (issues.length === 0) {
+    unplaced.push(isApiError(error, 409) ? REVIEW_IN_PROGRESS_MESSAGE : errorMessage(error))
+  }
   if (unplaced.length > 0) setError('root.server', { type: 'server', message: unplaced.join(' ') })
 }
