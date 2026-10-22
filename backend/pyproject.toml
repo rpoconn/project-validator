@@ -1,0 +1,54 @@
+[project]
+name = "project-tracker"
+version = "0.1.0"
+description = "Project tracker API with AI-powered risk review"
+authors = [
+    { name = "Ryan O'Connell", email = "rpoconn@gmail.com" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "aiosqlite>=0.22.1",
+    "anthropic>=2.1.0",
+    "fastapi>=0.159.1",
+    "pydantic>=2.14.1",
+    "pydantic-settings>=2.16.1",
+    "sqlalchemy[asyncio]>=2.1.6",
+    "tenacity>=9.2.1",
+    "uvicorn[standard]>=0.54.0",
+]
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "mypy>=2.4.0",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "ruff>=0.17.1",
+]
+
+[tool.uv]
+package = false
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "ASYNC", "SIM", "RUF", "T20"]
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+plugins = ["pydantic.mypy"]
+files = ["src", "tests", "scripts"]
+
+[tool.pydantic-mypy]
+init_forbid_extra = true
+init_typed = true
+warn_required_dynamic_aliases = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+pythonpath = ["."]
+testpaths = ["tests"]

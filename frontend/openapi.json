@@ -1,0 +1,476 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Project Tracker API",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/api/health": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "summary": "Get Health",
+        "operationId": "get_health",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/projects": {
+      "get": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "List Projects",
+        "operationId": "list_projects",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ProjectRead"
+                  },
+                  "type": "array",
+                  "title": "Response List Projects"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Create Project",
+        "operationId": "create_project",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProjectCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectRead"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/projects/{project_id}": {
+      "get": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Get Project",
+        "operationId": "get_project",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectRead"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Project not found"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/projects/{project_id}/review": {
+      "post": {
+        "tags": [
+          "projects"
+        ],
+        "summary": "Rerun Review",
+        "description": "Start a fresh review. Rejected with 409 while one is already pending.",
+        "operationId": "rerun_review",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Project Id"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectRead"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Project not found"
+          },
+          "409": {
+            "description": "A review is already in progress"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "HealthResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "ok",
+            "title": "Status"
+          },
+          "anthropic_configured": {
+            "type": "boolean",
+            "title": "Anthropic Configured"
+          },
+          "llm_mock": {
+            "type": "boolean",
+            "title": "Llm Mock"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "anthropic_configured",
+          "llm_mock"
+        ],
+        "title": "HealthResponse"
+      },
+      "ProjectCreate": {
+        "properties": {
+          "title": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Title"
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 5000,
+            "minLength": 1,
+            "title": "Description"
+          },
+          "budget_min": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Budget Min"
+          },
+          "budget_max": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Budget Max"
+          },
+          "industry": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Industry"
+          },
+          "timeline": {
+            "items": {
+              "$ref": "#/components/schemas/TimelineItem"
+            },
+            "type": "array",
+            "maxItems": 50,
+            "title": "Timeline"
+          }
+        },
+        "type": "object",
+        "required": [
+          "title",
+          "description",
+          "budget_min",
+          "budget_max",
+          "industry"
+        ],
+        "title": "ProjectCreate"
+      },
+      "ProjectRead": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "budget_min": {
+            "type": "integer",
+            "title": "Budget Min"
+          },
+          "budget_max": {
+            "type": "integer",
+            "title": "Budget Max"
+          },
+          "industry": {
+            "type": "string",
+            "title": "Industry"
+          },
+          "timeline": {
+            "items": {
+              "$ref": "#/components/schemas/TimelineItem"
+            },
+            "type": "array",
+            "title": "Timeline"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "review_status": {
+            "$ref": "#/components/schemas/ReviewStatus"
+          },
+          "review": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProjectReview"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "review_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Review Error"
+          },
+          "review_updated_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Review Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "title",
+          "description",
+          "budget_min",
+          "budget_max",
+          "industry",
+          "timeline",
+          "created_at",
+          "review_status",
+          "review",
+          "review_error",
+          "review_updated_at"
+        ],
+        "title": "ProjectRead"
+      },
+      "ProjectReview": {
+        "properties": {
+          "summary": {
+            "type": "string",
+            "title": "Summary",
+            "description": "A 2-3 sentence summary of the project and its risk profile."
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 3,
+            "minItems": 3,
+            "title": "Tags",
+            "description": "Exactly three short (1-3 word) tags categorising the project."
+          },
+          "risks": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Risks",
+            "description": "Risk checklist: one concise, specific risk per item."
+          }
+        },
+        "type": "object",
+        "required": [
+          "summary",
+          "tags",
+          "risks"
+        ],
+        "title": "ProjectReview",
+        "description": "AI risk review of a project; also the structured-output schema requested from Claude."
+      },
+      "ReviewStatus": {
+        "type": "string",
+        "enum": [
+          "unreviewed",
+          "pending",
+          "complete",
+          "error"
+        ],
+        "title": "ReviewStatus"
+      },
+      "TimelineItem": {
+        "properties": {
+          "goal": {
+            "type": "string",
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Goal"
+          },
+          "due_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Due At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "goal",
+          "due_at"
+        ],
+        "title": "TimelineItem"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      }
+    }
+  }
+}

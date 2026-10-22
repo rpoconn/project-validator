@@ -1,0 +1,41 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Run Backend",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "uvicorn",
+      "args": ["src.main:app", "--reload", "--port", "8000"],
+      "cwd": "${workspaceFolder}/backend",
+      "python": "${workspaceFolder}/backend/.venv/bin/python",
+      "windows": {
+        "python": "${workspaceFolder}/backend/.venv/Scripts/python.exe"
+      },
+      "justMyCode": true,
+      "console": "integratedTerminal",
+      "presentation": { "group": "app", "order": 1 }
+    },
+    {
+      "name": "Run UI",
+      "type": "node-terminal",
+      "request": "launch",
+      "command": "npm run dev -- --strictPort",
+      "cwd": "${workspaceFolder}/frontend",
+      "serverReadyAction": {
+        "pattern": "ready in",
+        "uriFormat": "http://localhost:5173",
+        "action": "openExternally"
+      },
+      "presentation": { "group": "app", "order": 2 }
+    }
+  ],
+  "compounds": [
+    {
+      "name": "Run Both",
+      "configurations": ["Run Backend", "Run UI"],
+      "stopAll": true,
+      "presentation": { "group": "app", "order": 0 }
+    }
+  ]
+}
