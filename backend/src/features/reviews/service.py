@@ -223,6 +223,8 @@ async def _record_outcome(
                 await projects_service.set_review_result(session, project_id, outcome)
             else:
                 await projects_service.set_review_error(session, project_id, outcome)
+    except projects_service.ProjectNotFoundError:
+        logger.warning("Project %s was deleted during its review; outcome discarded", project_id)
     except Exception:
         logger.exception("Could not record review outcome for project %s", project_id)
 

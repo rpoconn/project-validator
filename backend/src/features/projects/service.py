@@ -4,7 +4,7 @@ import logging
 from collections.abc import Sequence
 from typing import Any, cast
 
-from sqlalchemy import CursorResult, Update, select, update
+from sqlalchemy import CursorResult, Delete, Update, delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.features.projects.models import Project, ReviewStatus
@@ -26,21 +26,25 @@ class ReviewAlreadyPendingError(RuntimeError):
         self.project_id = project_id
 
 
-async def _execute_dml(session: AsyncSession, statement: Update) -> CursorResult[Any]:
+async def _execute_dml(session: AsyncSession, statement: Update | Delete) -> CursorResult[Any]:
     # DML statements return a CursorResult (with `rowcount`); the session API types it as Result.
     return cast(CursorResult[Any], await session.execute(statement))
 
 
+def _column_values(data: ProjectCreate) -> dict[str, Any]:
+    """The user-editable columns of a project, as stored."""
+    return {
+        "title": data.title,
+        "description": data.description,
+        "budget_min": data.budget_min,
+        "budget_max": data.budget_max,
+        "industry": data.industry,
+        "timeline": [item.model_dump(mode="json") for item in data.timeline],
+    }
+
+
 async def create_project(session: AsyncSession, data: ProjectCreate) -> Project:
-    project = Project(
-        title=data.title,
-        description=data.description,
-        budget_min=data.budget_min,
-        budget_max=data.budget_max,
-        industry=data.industry,
-        timeline=[item.model_dump(mode="json") for item in data.timeline],
-        review_status=ReviewStatus.PENDING,
-    )
+    project = Project(**_column_values(data), review_status=ReviewStatus.PENDING)
     session.add(project)
     await session.commit()
     logger.info("Created project %s", project.id)
@@ -67,8 +71,8 @@ async def get_project(session: AsyncSession, project_id: int) -> Project:
     return project
 
 
-async def mark_review_pending(session: AsyncSession, project_id: int) -> Project:
-    """Start a new review, discarding the previous outcome.
+async def _begin_review(session: AsyncSession, project_id: int, **values: Any) -> Project:
+    """Put a project into `pending`, discarding the previous outcome and applying `values`.
 
     The status check and update are a single conditional UPDATE, so two concurrent requests cannot
     both start a review. Raises `ReviewAlreadyPendingError` if one is already running.
@@ -78,6 +82,7 @@ async def mark_review_pending(session: AsyncSession, project_id: int) -> Project
         update(Project)
         .where(Project.id == project_id, Project.review_status != ReviewStatus.PENDING)
         .values(
+            **values,
             review_status=ReviewStatus.PENDING,
             review=None,
             review_error=None,
@@ -90,6 +95,31 @@ async def mark_review_pending(session: AsyncSession, project_id: int) -> Project
         raise ReviewAlreadyPendingError(project_id)
     await session.commit()
     return await get_project(session, project_id)
+
+
+async def mark_review_pending(session: AsyncSession, project_id: int) -> Project:
+    """Start a new review, discarding the previous outcome."""
+    return await _begin_review(session, project_id)
+
+
+async def update_project(session: AsyncSession, project_id: int, data: ProjectCreate) -> Project:
+    """Replace a project's details and start a fresh review of them.
+
+    Rejected with `ReviewAlreadyPendingError` while a review is running, since its result would
+    describe the old details.
+    """
+    project = await _begin_review(session, project_id, **_column_values(data))
+    logger.info("Updated project %s", project_id)
+    return project
+
+
+async def delete_project(session: AsyncSession, project_id: int) -> None:
+    result = await _execute_dml(session, delete(Project).where(Project.id == project_id))
+    if result.rowcount == 0:
+        await session.rollback()
+        raise ProjectNotFoundError(project_id)
+    await session.commit()
+    logger.info("Deleted project %s", project_id)
 
 
 async def reset_interrupted_reviews(session: AsyncSession) -> int:

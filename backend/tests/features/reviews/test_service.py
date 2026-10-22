@@ -375,6 +375,30 @@ async def test_run_review_without_api_key_makes_no_request(
     assert project.review_error == "AnthropicNotConfiguredError: ANTHROPIC_API_KEY not configured"
 
 
+async def test_run_review_discards_outcome_when_project_deleted_mid_review(
+    monkeypatch: pytest.MonkeyPatch,
+    session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    project = await _create(session)
+    client, script = scripted_client(monkeypatch, make_message())
+
+    async def create_then_delete(**kwargs: Any) -> Any:
+        await projects_service.delete_project(session, project.id)
+        return await script.create(**kwargs)
+
+    monkeypatch.setattr(client.beta.messages, "create", create_then_delete)
+
+    with caplog.at_level("WARNING"):
+        await _run(project.id, session_factory, client)
+
+    assert len(script.calls) == 1
+    assert "deleted during its review" in caplog.text
+    assert "Could not record review outcome" not in caplog.text
+    assert await projects_service.list_projects(session) == []
+
+
 async def test_run_review_never_raises_for_missing_project(
     monkeypatch: pytest.MonkeyPatch, session_factory: async_sessionmaker[AsyncSession]
 ) -> None:

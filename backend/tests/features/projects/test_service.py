@@ -124,6 +124,51 @@ async def test_mark_review_pending_rejects_review_in_progress(session: AsyncSess
         await service.mark_review_pending(session, project.id)
 
 
+async def test_update_project_replaces_details_and_restarts_review(
+    session: AsyncSession, session_factory: async_sessionmaker[AsyncSession]
+) -> None:
+    project = await _create(session)
+    await service.set_review_result(session, project.id, REVIEW)
+    data = ProjectCreate.model_validate(
+        project_payload(title="Renamed", industry="Retail", timeline=[])
+    )
+
+    updated = await service.update_project(session, project.id, data)
+
+    assert updated.id == project.id
+    assert updated.title == "Renamed"
+    assert updated.industry == "Retail"
+    assert updated.timeline == []
+    assert updated.review_status is ReviewStatus.PENDING
+    assert updated.review is None
+    async with session_factory() as other:
+        stored = await service.get_project(other, project.id)
+    assert stored.title == "Renamed"
+    assert stored.review_status is ReviewStatus.PENDING
+
+
+async def test_update_project_rejects_review_in_progress(session: AsyncSession) -> None:
+    project = await _create(session)  # new projects start pending
+    data = ProjectCreate.model_validate(project_payload(title="Renamed"))
+
+    with pytest.raises(service.ReviewAlreadyPendingError):
+        await service.update_project(session, project.id, data)
+
+    await session.refresh(project)
+    assert project.title == "Warehouse automation"
+
+
+async def test_delete_project_removes_it(session: AsyncSession) -> None:
+    project = await _create(session)
+    kept = await _create(session, title="Kept")
+
+    await service.delete_project(session, project.id)
+
+    assert [p.id for p in await service.list_projects(session)] == [kept.id]
+    with pytest.raises(service.ProjectNotFoundError):
+        await service.get_project(session, project.id)
+
+
 async def test_reset_interrupted_reviews_only_touches_pending(session: AsyncSession) -> None:
     pending = await _create(session, title="Pending")
     complete = await _create(session, title="Complete")
@@ -148,10 +193,12 @@ async def test_reset_interrupted_reviews_only_touches_pending(session: AsyncSess
         lambda s: service.mark_review_pending(s, 42),
         lambda s: service.set_review_result(s, 42, REVIEW),
         lambda s: service.set_review_error(s, 42, "boom"),
+        lambda s: service.update_project(s, 42, ProjectCreate.model_validate(project_payload())),
+        lambda s: service.delete_project(s, 42),
     ],
 )
-async def test_review_updates_on_missing_project_raise(
-    session: AsyncSession, operation: Callable[[AsyncSession], Awaitable[Project]]
+async def test_updates_on_missing_project_raise(
+    session: AsyncSession, operation: Callable[[AsyncSession], Awaitable[Project | None]]
 ) -> None:
     with pytest.raises(service.ProjectNotFoundError):
         await operation(session)

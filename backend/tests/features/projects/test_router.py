@@ -123,6 +123,87 @@ async def test_rerun_review_recovers_interrupted_review(
     assert review_runner.calls == [created["id"], created["id"]]
 
 
+async def test_update_project_replaces_details_and_restarts_review(
+    client: AsyncClient, session: AsyncSession, review_runner: FakeReviewRunner
+) -> None:
+    created = await _create(client)
+    await service.set_review_error(session, created["id"], "boom")
+
+    response = await client.put(
+        f"/api/projects/{created['id']}",
+        json=project_payload(title="Renamed", budget_max=999_999, timeline=[]),
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["id"] == created["id"]
+    assert body["title"] == "Renamed"
+    assert body["budget_max"] == 999_999
+    assert body["timeline"] == []
+    assert body["created_at"] == created["created_at"]
+    assert body["review_status"] == "pending"
+    assert body["review"] is None
+    assert body["review_error"] is None
+    assert review_runner.calls == [created["id"], created["id"]]
+    assert (await client.get(f"/api/projects/{created['id']}")).json() == body
+
+
+async def test_update_project_conflicts_while_pending(
+    client: AsyncClient, review_runner: FakeReviewRunner
+) -> None:
+    created = await _create(client)  # the creation review is still pending
+
+    response = await client.put(f"/api/projects/{created['id']}", json=project_payload())
+
+    assert response.status_code == 409
+    assert "already has a review in progress" in response.json()["detail"]
+    assert review_runner.calls == [created["id"]]
+
+
+async def test_update_project_not_found(
+    client: AsyncClient, review_runner: FakeReviewRunner
+) -> None:
+    response = await client.put("/api/projects/999", json=project_payload())
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Project 999 not found"}
+    assert review_runner.calls == []
+
+
+async def test_update_project_validation_error(
+    client: AsyncClient, session: AsyncSession, review_runner: FakeReviewRunner
+) -> None:
+    created = await _create(client)
+    await service.set_review_error(session, created["id"], "boom")
+
+    response = await client.put(
+        f"/api/projects/{created['id']}", json=project_payload(budget_min=10, budget_max=5)
+    )
+
+    assert response.status_code == 422
+    assert "budget_max must be greater than or equal" in response.text
+    assert review_runner.calls == [created["id"]]
+    assert (await client.get(f"/api/projects/{created['id']}")).json()["review_status"] == "error"
+
+
+async def test_delete_project(client: AsyncClient) -> None:
+    created = await _create(client)  # deleting works even while the review is pending
+
+    response = await client.delete(f"/api/projects/{created['id']}")
+
+    assert response.status_code == 204
+    assert response.content == b""
+    assert (await client.get(f"/api/projects/{created['id']}")).status_code == 404
+    assert (await client.get("/api/projects")).json() == []
+
+
+async def test_delete_project_not_found(client: AsyncClient) -> None:
+    response = await client.delete("/api/projects/999")
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Project 999 not found"}
+
+
 async def test_review_result_is_served(client: AsyncClient, session: AsyncSession) -> None:
     created = await _create(client)
     review = ProjectReview(summary="Solid plan.", tags=["a", "b", "c"], risks=["Scope creep"])
@@ -152,6 +233,12 @@ async def test_openapi_exposes_project_schemas_and_operation_ids(client: AsyncCl
     assert paths["/api/projects"]["get"]["operationId"] == "list_projects"
     assert paths["/api/projects"]["post"]["operationId"] == "create_project"
     assert paths["/api/projects/{project_id}"]["get"]["operationId"] == "get_project"
+    update = paths["/api/projects/{project_id}"]["put"]
+    assert update["operationId"] == "update_project"
+    assert {"200", "404", "409", "422"} <= set(update["responses"])
+    remove = paths["/api/projects/{project_id}"]["delete"]
+    assert remove["operationId"] == "delete_project"
+    assert {"204", "404"} <= set(remove["responses"])
     rerun = paths["/api/projects/{project_id}/review"]["post"]
     assert rerun["operationId"] == "rerun_review"
     assert {"202", "404", "409"} <= set(rerun["responses"])
